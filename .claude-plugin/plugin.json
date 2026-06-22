@@ -1,0 +1,25 @@
+{
+  "name": "kleap",
+  "version": "0.1.0",
+  "description": "Build, edit and publish real, hosted websites with Kleap from any agent. Create a site from a prompt or push exact files with your own model, then publish with the verified-live guarantee — hosting, database, auth, SSL and custom domains included.",
+  "author": {
+    "name": "Kleap",
+    "url": "https://kleap.co"
+  },
+  "homepage": "https://kleap.co/mcp",
+  "repository": "https://github.com/Kleap-co/skills",
+  "license": "MIT",
+  "keywords": [
+    "kleap",
+    "website-builder",
+    "mcp",
+    "model-context-protocol",
+    "ai-agent",
+    "publish",
+    "hosting",
+    "astro",
+    "claude",
+    "cursor",
+    "chatgpt"
+  ]
+}
