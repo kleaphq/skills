@@ -37,6 +37,6 @@ claude mcp add --transport http --scope user kleap https://kleap.co/api/mcp
 
 - **Cursor / Windsurf / Cline:** add `https://kleap.co/api/mcp` as an HTTP MCP server in your `mcp.json`.
 - **ChatGPT / Claude web:** add `https://kleap.co/api/mcp` as a custom connector.
-- **Local CLI:** `npx kleap` (run `npx kleap auth login` to sign in without a key).
+- **Local CLI:** `npx @eliottd/kleap` (run `npx @eliottd/kleap auth login` to sign in without a key).
 
 Verify with `claude mcp list` or the `/mcp` command, then ask your agent to build a site.

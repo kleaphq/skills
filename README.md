@@ -37,7 +37,7 @@ claude mcp add --transport http --scope user kleap https://kleap.co/api/mcp
 ```
 
 Cursor / Windsurf / Cline: add `https://kleap.co/api/mcp` as an HTTP MCP server.
-ChatGPT / Claude web: add it as a custom connector. Prefer a local CLI? `npx kleap` works too.
+ChatGPT / Claude web: add it as a custom connector. Prefer a local CLI? `npx @eliottd/kleap` works too.
 
 ## Skills
 
