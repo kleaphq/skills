@@ -11,9 +11,26 @@
       "description": "Build, edit and publish real hosted websites via the Kleap MCP server, with a verified-live guarantee.",
       "version": "0.1.0",
       "skills": [
-        { "name": "build", "path": "kleap-build", "invoke": "/kleap:build" },
-        { "name": "edit", "path": "kleap-edit", "invoke": "/kleap:edit" },
-        { "name": "publish", "path": "kleap-publish", "invoke": "/kleap:publish" }
+        {
+          "name": "build",
+          "path": "kleap-build",
+          "invoke": "/kleap:build"
+        },
+        {
+          "name": "edit",
+          "path": "kleap-edit",
+          "invoke": "/kleap:edit"
+        },
+        {
+          "name": "publish",
+          "path": "kleap-publish",
+          "invoke": "/kleap:publish"
+        },
+        {
+          "name": "multilingual",
+          "path": "kleap-multilingual",
+          "invoke": "/kleap:multilingual"
+        }
       ]
     }
   ]
