@@ -6,7 +6,7 @@ and publishing real hosted websites with Kleap from any agent.
 ## Option 1 — `npx skills` (recommended, cross-agent)
 
 ```bash
-npx skills add Kleap-co/skills
+npx skills add kleaphq/skills
 ```
 
 Installs all three skills. The `skills` CLI auto-detects the host agent (Claude
@@ -17,13 +17,13 @@ Code, Cursor, Codex, …) and writes each skill to the right path.
 GitHub CLI v2.90+ extension.
 
 ```bash
-gh skill install Kleap-co/skills
+gh skill install kleaphq/skills
 ```
 
 ## Option 3 — Claude Code marketplace
 
 ```
-/plugin marketplace add Kleap-co/skills
+/plugin marketplace add kleaphq/skills
 /plugin install kleap@kleap
 ```
 
