@@ -12,19 +12,19 @@ serving.
 ## Install
 
 ```bash
-npx skills add Kleap-co/skills
+npx skills add kleaphq/skills
 ```
 
 The `skills` CLI auto-detects your agent and installs all three skills. Alternatives:
 
 ```bash
-gh skill install Kleap-co/skills          # GitHub CLI extension
+gh skill install kleaphq/skills          # GitHub CLI extension
 ```
 
 Claude Code marketplace:
 
 ```
-/plugin marketplace add Kleap-co/skills
+/plugin marketplace add kleaphq/skills
 /plugin install kleap@kleap
 ```
 
