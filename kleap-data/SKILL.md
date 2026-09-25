@@ -43,12 +43,15 @@ call, no cursor.
 
 ## Database (the app's Postgres)
 
-1. `get_database_schema({ app_id })` — tables, `row_count`, columns
-   (`name, type, nullable, default, primary_key`). Always start here: never
-   guess table or column names.
+1. `get_database_schema({ app_id })` — tables, `row_count` (a planner
+   ESTIMATE, `null` if never analyzed — count with SQL for an exact number) and
+   columns (`name, type, nullable, default, primary_key`). Always start here:
+   never guess table or column names.
 2. Read: `query_database_rows({ app_id, table, where?, limit?, offset?,
    order_by?, order? })` — `where` is an equality object
-   (`{ "status": "new" }`), `limit` ≤ 500; page with `offset` while `has_more`.
+   (`{ "status": "new" }`), `limit` ≤ 500 (default 100); page with `offset`
+   while `has_more`. ≤ 5 MB per call (`truncated: true` beyond); a value over
+   256 KB comes back as `{ __kleap_value_too_large: true, bytes }`.
 3. Write:
    - `insert_database_rows({ app_id, table, rows: [ {…}, … ] })` — ≤ 500 per call; returns the inserted rows.
    - `update_database_rows({ app_id, table, where, set })` — `where` is
@@ -58,8 +61,12 @@ call, no cursor.
      more than a handful would go.
 4. Anything else (ranges, joins, aggregates, DDL):
    `run_database_sql({ app_id, sql, params? })` with `$1..$n` placeholders —
-   never paste user values into the SQL string. A single SELECT only needs
-   read access.
+   never paste user values into the SQL string. It is owner-level and
+   **always needs database:write, even for a SELECT** — to just read, prefer
+   `query_database_rows` (database:read). One statement at a time: EXPLAIN,
+   SHOW, COPY, CALL or a multi-statement script with a query/RETURNING get
+   `400 UNSUPPORTED_STATEMENT`. Rows are capped at 500 / 5 MB
+   (`truncated: true`); timeout 20 s for SELECT, 60 s otherwise.
 
 Data changes are live immediately — no `publish_app` needed (publishing is for
 files).
@@ -71,5 +78,6 @@ files).
 | `409 DATABASE_NOT_PROVISIONED` | The app has no database: `modify_app({ app_id, message: "add a database" })`, wait for the task, then retry. |
 | `422 RLS_REQUIRED` | The SQL created a public table without row level security: re-run with `ALTER TABLE <t> ENABLE ROW LEVEL SECURITY;` (+ policies). For tables the site's pages use, prefer `modify_app` — it writes schema, policies and pages together. |
 | `403 INSUFFICIENT_SCOPE` | The connection/key predates this feature (`details.required_scope`). API key: create a new one with the **Full** preset. OAuth connector: disconnect and reconnect Kleap. Retrying unchanged never works. |
+| `400 UNSUPPORTED_STATEMENT` | `run_database_sql` got a statement the API refuses (EXPLAIN, SHOW, COPY, CALL, scripts with a query or RETURNING…): send one supported statement, or use the row tools. |
 | `400 VALIDATION_ERROR` | Fix the input (unknown column, empty `where`, bad JSON). |
 | `429 RATE_LIMITED` | Wait a minute, retry once. |
