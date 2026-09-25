@@ -1,7 +1,7 @@
 {
   "name": "kleap",
-  "version": "0.1.0",
-  "description": "Build, edit and publish real, hosted websites with Kleap from any agent. Create a site from a prompt or push exact files with your own model, then publish with the verified-live guarantee — hosting, database, auth, SSL and custom domains included.",
+  "version": "0.2.0",
+  "description": "Build, edit and publish real, hosted websites with Kleap from any agent — then run them: read form leads, traffic and the site's own database, buy (user-paid checkout) or connect a domain. Verified-live publishing; hosting, database, auth, SSL and domains included.",
   "author": {
     "name": "Kleap",
     "url": "https://kleap.co"
@@ -20,6 +20,9 @@
     "astro",
     "claude",
     "cursor",
-    "chatgpt"
+    "chatgpt",
+    "database",
+    "leads",
+    "domains"
   ]
 }

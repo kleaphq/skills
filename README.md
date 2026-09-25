@@ -15,7 +15,7 @@ serving.
 npx skills add kleaphq/skills
 ```
 
-The `skills` CLI auto-detects your agent and installs all three skills. Alternatives:
+The `skills` CLI auto-detects your agent and installs all the skills. Alternatives:
 
 ```bash
 gh skill install kleaphq/skills          # GitHub CLI extension
@@ -37,7 +37,7 @@ claude mcp add --transport http --scope user kleap https://kleap.co/api/mcp
 ```
 
 Cursor / Windsurf / Cline: add `https://kleap.co/api/mcp` as an HTTP MCP server.
-ChatGPT / Claude web: add it as a custom connector. Prefer a local CLI? `npx @eliottd/kleap` works too.
+ChatGPT / Claude web: add it as a custom connector. Prefer a local CLI? `npx -y kleap-cli` works too.
 
 ## Skills
 
@@ -45,7 +45,9 @@ ChatGPT / Claude web: add it as a custom connector. Prefer a local CLI? `npx @el
 |-------|-----------|
 | **kleap-build** | Create a new hosted site from a prompt |
 | **kleap-edit**  | Change an existing site (exact files or describe the outcome) |
-| **kleap-publish** | Publish with the verified-live guarantee + connect a domain |
+| **kleap-publish** | Publish with the verified-live guarantee, buy a domain (user-paid checkout) or connect one |
+| **kleap-data** | Read form leads, traffic and Search Console; read and change the site's database |
+| **kleap-multilingual** | Make an Astro site multilingual (i18n routes, hreflang, language switcher) |
 
 ## The golden rule
 

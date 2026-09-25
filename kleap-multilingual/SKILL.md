@@ -1,5 +1,5 @@
 ---
-version: 0.1.0
+version: 0.2.0
 name: kleap-multilingual
 description: >-
   Make a Kleap (Astro) site multilingual / bilingual — the same site in two or

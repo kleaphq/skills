@@ -1,5 +1,5 @@
 ---
-version: 0.1.0
+version: 0.2.0
 name: kleap-build
 description: >-
   Create a real, hosted website with Kleap from a description. Kleap builds it

@@ -8,8 +8,8 @@
     {
       "name": "kleap",
       "source": "./",
-      "description": "Build, edit and publish real hosted websites via the Kleap MCP server, with a verified-live guarantee.",
-      "version": "0.1.0",
+      "description": "Build, edit and publish real hosted websites via the Kleap MCP server (verified-live), read their leads, traffic and database, and buy or connect domains.",
+      "version": "0.2.0",
       "skills": [
         {
           "name": "build",
@@ -30,6 +30,11 @@
           "name": "multilingual",
           "path": "kleap-multilingual",
           "invoke": "/kleap:multilingual"
+        },
+        {
+          "name": "data",
+          "path": "kleap-data",
+          "invoke": "/kleap:data"
         }
       ]
     }

@@ -1,5 +1,5 @@
 ---
-version: 0.1.0
+version: 0.2.0
 name: kleap-edit
 description: >-
   Change a website already made on Kleap — fix copy, swap images, edit a shared
@@ -31,9 +31,17 @@ Never rewrite a file blind:
    `src/data/*.json`, `public/*`.
 2. `read_files({ app_id, paths })` — get the CURRENT contents (works with a
    read-only key).
-3. Edit only what must change.
-4. `write_files({ app_id, files: [{ path, content }] })`.
-5. `publish_app` (see the **kleap-publish** skill).
+3. Change only what must change:
+   - inside an existing file → `edit_files({ app_id, edits: [{ path,
+     old_string, new_string, replace_all? }] })` (old_string must match the
+     current text exactly — that's why you read first);
+   - a new file or a full rewrite → `write_files({ app_id, files: [{ path,
+     content }] })`; images/fonts/PDFs go with `encoding: "base64"` (512 KB max);
+   - a new picture → `generate_image({ app_id, path: "public/hero.webp",
+     prompt })` (no bytes to send; use a NEW filename to replace an image);
+   - remove a page or asset → `delete_files({ app_id, paths })` (never blank a
+     file to "delete" it — the URL would still answer 200).
+4. `publish_app` (see the **kleap-publish** skill).
 
 This is the reliable way to fix shared components, headers/footers, wrong
 numbers, broken links and dead forms.
@@ -47,15 +55,17 @@ the code.
 ## 3. Publish the change
 
 A change isn't live until you publish AND Kleap confirms it. After
-`write_files`, call `publish_app`; after a `modify_app` task completes, publish
-too. Then verify with `get_publish_status` (see **kleap-publish**). Never claim
+`write_files` / `edit_files` / `delete_files` / `generate_image`, call
+`publish_app` (a completed `modify_app` task is already deployed). Then verify with `get_publish_status` (see **kleap-publish**). Never claim
 the edit is live until it's confirmed.
 
 ## Common edits
 
 - Wrong phone/price/address → read the page or shared data file, fix the value,
   write, publish.
-- Broken images → replace the `src` with a real, reachable URL (don't invent
-  image URLs — they 404). Use the user's own uploaded assets or a real stock URL.
-- Dead form / link → read the component, fix the target, write, publish.
+- Broken images → `generate_image` a real one into `public/` and point the
+  `src` at it, or use the user's own uploaded assets (don't invent image URLs —
+  they 404).
+- Dead form / link → read the component, fix the target with `edit_files`, publish.
+  To read what a working form collected, see **kleap-data**.
 - New page → write `src/pages/<slug>.astro`, link it from the nav component.
