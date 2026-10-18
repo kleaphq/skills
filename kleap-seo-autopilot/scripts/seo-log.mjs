@@ -68,6 +68,12 @@ const jl = (file) =>
 const readJson = (file, d) => { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return d; } };
 const writeJson = (file, v) => fs.writeFileSync(file, JSON.stringify(v, null, 2) + "\n");
 const runs = () => jl(F("log.jsonl"));
+// A fix is looked at three times: day 3 "did the owner keep it?", day 14 an early 7-day Google read, day 28 the real verdict (a 28-day window that starts AFTER the fix).
+const stageOf = (age) => (age >= 28 ? "full" : age >= 14 ? "mid" : age >= 3 ? "early" : null);
+const RANK = { early: 1, mid: 2, full: 3 };
+const idFor = (base, stage) => (stage === "full" ? base : `${base}|${stage}`);
+const splitId = (id) => { const m = String(id).match(/^(.*)\|(early|mid)$/); return m ? { base: m[1], stage: m[2] } : { base: String(id), stage: "full" }; };
+const undoneRuns = () => new Set(runs().filter((e) => e.undo_of).map((e) => e.undo_of)); // runs the owner asked us to take back: their text is gone because WE removed it, not because the owner chose other wording
 const fixId = (e, f) => `${e.site}|${e.ts}|${f.page}|${f.type}`; // the site is part of the id: two sites logged in the same millisecond must not collide
 const FIELD_OF = (t) => (/title/.test(t) ? "title" : /description/.test(t) ? "description" : null);
 const norm = (s) => String(s ?? "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -95,17 +101,19 @@ function canon(site) {
 // ── lessons ────────────────────────────────────────────────────────────────────────────────────
 function rebuildLessons() {
   const all = jl(F("measures.jsonl"));
-  const fullIds = new Set(all.filter((m) => !m.early).map((m) => m.id));
-  const ms = all.filter((m) => !m.early || !fullIds.has(String(m.id).replace(/\|early$/, ""))); // the early look is superseded by the full measure
+  // one record per fix: the most advanced stage wins (full > mid > early). Override (kept / rewritten) counts from whichever stage we have; a Google or traffic
+  // verdict counts only from the full 28-day measure: a 7-day early read is too noisy to teach anything.
+  const best = new Map();
+  for (const m of all) { const { base, stage } = splitId(m.id); const cur = best.get(base); if (!cur || RANK[stage] > RANK[cur.stage]) best.set(base, { ...m, stage }); }
+  const ms = [...best.values()];
   const byType = {};
   for (const m of ms) {
     const t = (byType[m.type] ||= { measured: 0, kept: 0, overridden: 0, improved: 0, flat: 0, worse: 0, too_little_data: 0 });
     t.measured++;
     if (m.override === "kept") t.kept++;
     if (m.override === "overridden") t.overridden++;
-    // Google data first, all-source traffic is the weaker fallback. When the owner replaced our wording, the page now runs THEIR text:
-    // whatever Google did is not our fix's result, so only the override is counted (it is the lesson), never a good/bad verdict.
-    const v = m.override === "overridden" ? null : (m.gsc?.verdict ?? m.traffic?.verdict);
+    // When the owner replaced our wording, the page now runs THEIR text: whatever Google did is not our fix's result, so only the override is counted.
+    const v = m.stage !== "full" || m.override === "overridden" ? null : (m.gsc?.verdict ?? m.traffic?.verdict);
     if (v) t[v]++;
   }
   const rules = { doubleDown: [], testing: [], dropped: [] };
@@ -173,12 +181,29 @@ function pushMemory(site) {
 
 // ── commands ───────────────────────────────────────────────────────────────────────────────────
 if (cmd === "add") {
-  const e = JSON.parse(rest[0] || "{}");
+  // JSON as the argument, or on stdin (`add - <<'EOF' ... EOF`): stdin is the safe form, an apostrophe in a title breaks shell quoting
+  const raw = rest[0] && rest[0] !== "-" ? rest[0] : fs.readFileSync(0, "utf8");
+  let e; try { e = JSON.parse(raw || "{}"); } catch (err) { die(`the entry is not valid JSON (${err.message}). Pass it on stdin: seo-log.mjs add - <<'EOF' ... EOF`, 2); }
   if (!e.site) die('entry needs a "site"', 2);
   e.site = canon(e.site);
   for (const f of e.fixes || []) if (!f.field) f.field = FIELD_OF(f.type);
+  if (e.pending) { e.published = false; e.live_verified = false; }
   fs.appendFileSync(F("log.jsonl"), JSON.stringify({ ts: now().toISOString(), ...e }) + "\n");
-  console.log(`logged ${e.site}: ${(e.fixes || []).length} fix(es)${e.reverted ? " (reverted)" : ""} -> ${F("log.jsonl")}`);
+  console.log(`logged ${e.site}: ${(e.fixes || []).length} fix(es)${e.reverted ? " (reverted)" : ""}${e.pending ? " (PENDING: log it BEFORE publishing, then `push`, then publish, then `finish`)" : ""} -> ${F("log.jsonl")}`);
+} else if (cmd === "finish") {
+  // closes the run logged with "pending":true once the publish has been verified (or undone): seo-log.mjs finish <site> [--published] [--live-verified] [--reverted] [--notes "..."]
+  const site = canon(rest[0]);
+  if (!site) die("usage: seo-log.mjs finish <site> [--published] [--live-verified] [--reverted] [--notes text]", 2);
+  const lines = fs.existsSync(F("log.jsonl")) ? fs.readFileSync(F("log.jsonl"), "utf8").split("\n").filter(Boolean) : [];
+  let idx = -1;
+  for (let i = lines.length - 1; i >= 0; i--) { try { const e = JSON.parse(lines[i]); if (String(e.site) === String(site) && e.pending) { idx = i; break; } } catch {} }
+  if (idx < 0) die(`no pending run for ${site}`, 1);
+  const e = JSON.parse(lines[idx]);
+  delete e.pending; e.published = rest.includes("--published"); e.live_verified = rest.includes("--live-verified"); e.reverted = rest.includes("--reverted");
+  if (opt("--notes")) e.notes = opt("--notes");
+  lines[idx] = JSON.stringify(e);
+  fs.writeFileSync(F("log.jsonl"), lines.join("\n") + "\n");
+  console.log(`closed the run of ${e.ts}: published ${e.published}, live_verified ${e.live_verified}, reverted ${e.reverted}`);
 } else if (cmd === "mode") {
   const site = canon(rest[0]), val = rest[1];
   if (!site) die("usage: seo-log.mjs mode <site> [propose|auto|pause]", 2);
@@ -201,7 +226,12 @@ if (cmd === "add") {
   const touched = [...new Set(kept.filter((e) => Date.parse(e.ts) >= t14).flatMap((e) => (e.fixes || []).map((f) => `${f.page}|${f.type}`)))];
   const reverted = [...new Set(all.filter((e) => e.reverted && Date.parse(e.ts) >= t30).flatMap((e) => (e.fixes || []).map((f) => `${f.page}|${f.type}`)))];
   const measured = new Set(jl(F("measures.jsonl")).map((m) => m.id));
-  const due = kept.flatMap((e) => (e.fixes || []).filter((f) => { const a = daysBetween(e.ts, now()); return a >= 14 ? !measured.has(fixId(e, f)) : a >= 3 && !measured.has(fixId(e, f) + "|early"); }).map((f) => ({ page: f.page, type: f.type, fixed_on: dayOf(e.ts), stage: daysBetween(e.ts, now()) >= 14 ? "full" : "early" })));
+  const undone = undoneRuns();
+  const pending = [...all].reverse().find((e) => e.pending);
+  const due = kept.filter((e) => !undone.has(e.ts) && !e.pending).flatMap((e) => (e.fixes || []).flatMap((f) => {
+    const stage = stageOf(daysBetween(e.ts, now()));
+    return stage && !measured.has(idFor(fixId(e, f), stage)) && !(stage === "mid" && measured.has(fixId(e, f))) ? [{ page: f.page, type: f.type, fixed_on: dayOf(e.ts), stage }] : [];
+  }));
   const L = lessonsNow();
   const cfg = configOf();
   const lastScore = [...kept].reverse().find((e) => e.score?.after != null)?.score.after ?? null;
@@ -211,7 +241,8 @@ if (cmd === "add") {
     fixes_today: doneToday, remaining_today: mode === "pause" ? 0 : Math.max(0, 3 - doneToday),
     touched_last_14d: touched, reverted_last_30d: reverted, last_score: lastScore,
     lessons: L.rules, owner_style: L.owner_style, due_for_measure: due,
-    hint: due.length ? "run: node seo-audit.mjs <site> --json > audit.json; npx -y kleap-cli@2.1.0 search-console <site> --period 28d --json > gsc.json; npx -y kleap-cli@2.1.0 analytics <site> --period 30d --json > an.json; node seo-log.mjs measure <site> --audit audit.json --gsc gsc.json --analytics an.json   (a fix younger than 28 days: use --period 7d and add --gsc-days 7 for an early read)" : undefined,
+    ...(pending ? { pending_run: { ts: pending.ts, fixes: (pending.fixes || []).length, note: "a previous run logged its edits but never closed: check the LIVE page. If it is live and verified: `finish --published --live-verified`; if the edits are not live or you doubt them: `undo --apply`, publish, `finish --reverted`" } } : {}),
+    hint: due.length ? "run: node seo-log.mjs measure-due <site>   (it fetches the audit, Search Console and analytics itself and records what is due)" : undefined,
   }));
 } else if (cmd === "snapshot" || cmd === "rebaseline") {
   // snapshot: right after OUR successful publish. rebaseline: the owner says "I published my own edits" (or you checked that the live page shows them):
@@ -273,9 +304,8 @@ if (cmd === "add") {
 } else if (cmd === "measure") {
   const site = canon(rest[0]);
   const auditFile = opt("--audit"), gscFile = opt("--gsc"), anFile = opt("--analytics");
-  const minDays = Number(opt("--min-days", 14));
-  const gDays = Number(opt("--gsc-days", 28)); // length of the window the --gsc file covers: 28 (npx -y kleap-cli@2.1.0 search-console --period 28d) or 7 for an early read
-  if (!site || !auditFile) die("usage: seo-log.mjs measure <site> --audit audit.json [--gsc gsc.json --gsc-days 28|7] [--analytics an.json] [--min-days 14]", 2);
+  const gDays = Number(opt("--gsc-days", 28)); // length of the window the --gsc file covers: 28 (search-console --period 28d) or 7 (an early read of a fix that is 14-27 days old)
+  if (!site || !auditFile) die("usage: seo-log.mjs measure <site> --audit audit.json [--gsc gsc.json --gsc-days 28|7] [--analytics an.json]   (or simply: measure-due <site>)", 2);
   const audit = readJson(auditFile, null);
   const gsc = gscFile ? readJson(gscFile, null) : null;
   const an = anFile ? readJson(anFile, null) : null;
@@ -285,24 +315,27 @@ if (cmd === "add") {
   const gscBy = Object.fromEntries(gscPages.map((p) => { try { return [new URL(p.page, "https://x").pathname.replace(/(.)\/$/, "$1"), p]; } catch { return [p.page, p]; } }));
   const anBy = Object.fromEntries((an?.top_pages || []).map((p) => [p.path, p]));
   const done = new Set(jl(F("measures.jsonl")).map((m) => m.id));
+  const undone = undoneRuns();
   let n = 0;
-  for (const e of runs().filter((x) => String(x.site) === String(site) && !x.reverted)) {
+  for (const e of runs().filter((x) => String(x.site) === String(site) && !x.reverted && !x.pending && !x.undo_of && !undone.has(x.ts))) {
     const age = daysBetween(e.ts, now());
-    if (age < 3) continue;
+    const stage = stageOf(age);
+    if (!stage) continue;
+    if (stage === "full" && gDays < 28 && gscFile) continue; // a 7-day file cannot give the 28-day verdict: wait for the 28-day call
     for (const f of e.fixes || []) {
       const baseId = fixId(e, f);
-      const full = age >= minDays;
-      const id = full ? baseId : baseId + "|early"; // day 3-13: only "did the owner keep it?"; the Google verdict waits so it never blocks the later full measure
-      if (done.has(id)) continue;
-      const m = { id, ts: now().toISOString(), site, page: f.page, type: f.type, field: f.field || FIELD_OF(f.type), fixed_on: dayOf(e.ts), after: f.after, ...(full ? {} : { early: true }) };
+      const id = idFor(baseId, stage);
+      if (done.has(id) || (stage === "mid" && done.has(baseId))) continue;
+      const m = { id, ts: now().toISOString(), site, page: f.page, type: f.type, field: f.field || FIELD_OF(f.type), fixed_on: dayOf(e.ts), after: f.after, stage };
       const cur = pageBy[f.page]?.[m.field];
       if (m.field && cur != null) {
         if (norm(cur) === norm(f.after)) m.override = "kept";
         else { m.override = "overridden"; m.owner_text = cur; }
       }
-      // Google: the window we read must start AFTER the fix, or it still contains the days we are comparing against. Per-day rates make a 7- and a 28-day window comparable.
+      // Google: the window must start AFTER the fix (else it still contains the days we compare against); per-day rates make a 7- and a 28-day window comparable.
       const g = gscBy[f.page];
-      if (full && f.gsc_before && g && age >= gDays) {
+      const googleOk = (stage === "full" && gDays >= 28 && age >= gDays) || (stage === "mid" && gDays <= 7 && age >= gDays);
+      if (googleOk && f.gsc_before && g) {
         const b = f.gsc_before, bDays = b.days || 28;
         if ((b.impressions ?? 0) < 100) m.gsc = { verdict: "too_little_data", before: b, now: g, window_days: gDays };
         else {
@@ -311,23 +344,42 @@ if (cmd === "add") {
           const bc = (b.clicks ?? 0) / bDays, gc = (g.clicks ?? 0) / gDays;
           const clicksRel = bc ? (gc - bc) / bc : 0;
           const verdict = (ctrRel >= 0.2 || posGain >= 1) && clicksRel > -0.2 ? "improved" : (ctrRel <= -0.2 && clicksRel < 0) || posGain <= -2 ? "worse" : "flat";
-          m.gsc = { verdict, before: b, now: { clicks: g.clicks, impressions: g.impressions, ctr: g.ctr, position: g.position }, window_days: gDays, early_read: gDays < 28 };
+          m.gsc = { verdict, before: b, now: { clicks: g.clicks, impressions: g.impressions, ctr: g.ctr, position: g.position }, window_days: gDays, early_read: stage !== "full" };
         }
       }
       const a = anBy[f.page];
-      if (full && !m.gsc && f.analytics_before && a && age >= 30) { // weaker evidence: all-source pageviews; both windows are 30 days, so the fix must be 30 days old
+      if (stage === "full" && !m.gsc && f.analytics_before && a && age >= 30) { // weaker evidence: all-source pageviews, both windows are 30 days, so the fix must be 30 days old
         const b = f.analytics_before.views ?? 0;
         const rel = b ? (a.views - b) / b : 0;
         m.traffic = { verdict: b < 20 ? "too_little_data" : rel >= 0.25 ? "improved" : rel <= -0.25 ? "worse" : "flat", before_views: b, now_views: a.views, note: "all sources, not only Google" };
       }
       fs.appendFileSync(F("measures.jsonl"), JSON.stringify(m) + "\n");
       n++;
-      const sig = (m.gsc ? `Google ${m.gsc.verdict}${m.gsc.early_read ? " (early, 7-day window)" : ""}` : m.traffic ? `traffic ${m.traffic.verdict}` : full && (gscFile || anFile) ? "no usable page data yet" : "") + (m.override === "overridden" && (m.gsc || m.traffic) ? " (the page runs the owner's wording: not counted for or against this fix type)" : "");
-      console.log(`${f.page} ${f.type} (fixed ${m.fixed_on}${full ? "" : ", early look"}): ${m.override ? "owner " + m.override : "not checkable"}${sig ? ", " + sig : ""}`);
+      const sig = (m.gsc ? `Google ${m.gsc.verdict}${m.gsc.early_read ? " (early read, 7-day window: not counted in the lessons)" : ""}` : m.traffic ? `traffic ${m.traffic.verdict}` : stage === "full" && (gscFile || anFile) ? "no usable page data (no baseline or no traffic on this page)" : "") + (m.override === "overridden" && (m.gsc || m.traffic) ? " (the page runs the owner's wording: not counted for or against this fix type)" : "");
+      console.log(`${f.page} ${f.type} (fixed ${m.fixed_on}, ${stage === "full" ? "28-day measure" : stage === "mid" ? "day-14 look" : "day-3 look"}): ${m.override ? "owner " + m.override : "not checkable"}${sig ? ", " + sig : ""}`);
     }
   }
   const L = rebuildLessons();
-  console.log(n ? `${n} fix(es) measured. rules: ${JSON.stringify(L.rules)}` : `Nothing due (fixes need 3+ days for the early look, ${minDays}+ for the full measure).`);
+  console.log(n ? `${n} fix(es) measured. rules: ${JSON.stringify(L.rules)}` : `Nothing due (day 3: did the owner keep it; day 14: early Google read; day 28: the verdict).`);
+} else if (cmd === "measure-due") {
+  // the whole measurement in one command: fetch what is needed, record what is due. No hint to remember.
+  const site = canon(rest[0]);
+  if (!site) die("usage: seo-log.mjs measure-due <site>", 2);
+  const self = process.argv[1], scripts = path.dirname(self);
+  const sh = (args, extra = {}) => execFileSync(args[0], args.slice(1), { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 180000, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, KLEAP_SEO_HOME: HOME, KLEAP_BIN: BIN.join(" "), ...extra } });
+  const brief = JSON.parse(sh([process.execPath, self, "brief", site]));
+  if (!brief.due_for_measure.length) { console.log("Nothing due (day 3: did the owner keep it; day 14: early Google read; day 28: the verdict)."); process.exit(0); }
+  const tmpd = fs.mkdtempSync(path.join(os.tmpdir(), "seo-measure-"));
+  const wf = (name, text) => { const f = path.join(tmpd, name); fs.writeFileSync(f, text); return f; };
+  const auditFile = wf("audit.json", sh([process.execPath, path.join(scripts, "seo-audit.mjs"), site, "--json", "--no-gsc", "--no-skip"]));
+  const stages = new Set(brief.due_for_measure.map((d) => d.stage));
+  let analytics = null; try { analytics = kleap(["analytics", site, "--period", "30d", "--json"], { allowFail: true }); } catch {}
+  const anFile = analytics ? wf("an.json", analytics) : null;
+  const run = (extra) => { try { console.log(sh([process.execPath, self, "measure", site, "--audit", auditFile, ...(anFile ? ["--analytics", anFile] : []), ...extra]).trim()); } catch (e) { console.error(String(e.stderr || e.message).slice(0, 300)); } };
+  if (stages.has("mid")) { const g7 = kleap(["search-console", site, "--period", "7d", "--json"], { allowFail: true }); run(g7 ? ["--gsc", wf("g7.json", g7), "--gsc-days", "7"] : []); }
+  const g28 = stages.has("full") ? kleap(["search-console", site, "--period", "28d", "--json"], { allowFail: true }) : null;
+  run(g28 ? ["--gsc", wf("g28.json", g28), "--gsc-days", "28"] : []);
+  fs.rmSync(tmpd, { recursive: true, force: true });
 } else if (cmd === "lessons") {
   const L = rebuildLessons();
   if (!Object.keys(L.byType).length) { console.log("No lessons yet: fixes need 14+ days before they can be measured. Run `measure` after that."); process.exit(0); }
@@ -367,8 +419,8 @@ if (cmd === "add") {
     for (const m of ms) console.log(`  - ${m.site} ${m.page} ${m.type}: ${m.override ? "owner " + m.override : "n/a"}${m.gsc ? ", Google " + m.gsc.verdict : m.traffic ? ", traffic " + m.traffic.verdict : ""}`);
   }
   const L = lessonsNow();
-  if (L.rules.doubleDown.length || L.rules.dropped.length) console.log(`\nLearned so far — double down: ${L.rules.doubleDown.join(", ") || "-"}; stop doing: ${L.rules.dropped.join(", ") || "-"}.`);
+  console.log(L.rules.doubleDown.length || L.rules.dropped.length ? `\nLearned so far: double down on ${L.rules.doubleDown.join(", ") || "-"}; stop doing ${L.rules.dropped.join(", ") || "-"}.` : `\nLearned so far: ${Object.keys(L.byType).length ? "not enough measured fixes to change the rules yet (" + Object.values(L.byType).reduce((a, t) => a + t.measured, 0) + " looked at)" : "nothing measured yet: a fix gets a first look at day 3 (did the owner keep it), an early Google read at day 14 and its verdict at day 28"}.`);
   console.log(`\nTotal: ${total} fix(es) kept, ${reverted} run(s) reverted. Google data lags 2-3 days and a title change needs 2-4 weeks to show: judge over weeks, and under 100 clicks in 28 days say "too little data".`);
 } else {
-  die("usage: seo-log.mjs pull|brief|drift|add|snapshot|push|mode|measure|lessons|weekly  (see the header of this file)", 2);
+  die("usage: seo-log.mjs pull|brief|drift|add|finish|snapshot|rebaseline|push|mode|undo|measure|measure-due|lessons|weekly  (see the header of this file)", 2);
 }

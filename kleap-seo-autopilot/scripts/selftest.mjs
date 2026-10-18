@@ -20,6 +20,10 @@ const run = (day, ...args) => execFileSync("node", [path.join(HERE, "seo-log.mjs
   encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
   env: { ...process.env, KLEAP_SEO_HOME: HOME, KLEAP_BIN: "false", KLEAP_SEO_OFFLINE: "1", KLEAP_SEO_TODAY: day },
 });
+const runIn = (day, input, ...args) => execFileSync("node", [path.join(HERE, "seo-log.mjs"), ...args], {
+  encoding: "utf8", input, stdio: ["pipe", "pipe", "pipe"],
+  env: { ...process.env, KLEAP_SEO_HOME: HOME, KLEAP_BIN: "false", KLEAP_SEO_OFFLINE: "1", KLEAP_SEO_TODAY: day },
+});
 let failed = 0;
 const check = (name, ok, extra = "") => { if (!ok) failed++; console.log(`${ok ? "ok  " : "FAIL"} ${name}${ok ? "" : "  " + extra}`); };
 const json = (s) => JSON.parse(s);
@@ -60,6 +64,41 @@ run("2026-09-20", "add", entry("C", [fix("/", "title_short", "x", "A better titl
 const auditC = tmp("c.json", { pages: [{ route: "/", title: "A better title for site C", description: "x" }] });
 const gscC = tmp("gc.json", { connected: true, has_data: true, top_pages: [{ page: "https://c.example/", clicks: 0, impressions: 15, ctr: 0, position: 38 }] });
 check("under 100 impressions = too little data", /too_little_data|owner kept$/.test(run("2026-10-20", "measure", "C", "--audit", auditC, "--gsc", gscC)) && json(run("2026-10-20", "brief", "C")).lessons.dropped.length === 0);
+
+
+// the measurement timeline of ONE fix: day 3 (kept?), day 15 (early 7-day read), day 30 (the real 28-day verdict). The full verdict must still happen after the early looks.
+run("2026-09-01", "add", entry("T", [fix("/", "title_short", "Old", "A better title for the timeline test", G(5, 400, 1.0, 15))]));
+const auditT = tmp("t.json", { pages: [{ route: "/", title: "A better title for the timeline test", description: "x" }] });
+const gscT7 = tmp("gt7.json", { connected: true, has_data: true, top_pages: [{ page: "https://t.example/", clicks: 4, impressions: 90, ctr: 4.4, position: 11 }] });
+const gscT28 = tmp("gt28.json", { connected: true, has_data: true, top_pages: [{ page: "https://t.example/", clicks: 20, impressions: 520, ctr: 3.8, position: 11.5 }] });
+check("day 3: a first look says whether the owner kept it, nothing about Google", /day-3 look\): owner kept$/.test(run("2026-09-04", "measure", "T", "--audit", auditT, "--gsc", gscT28).trim().split("\n")[0]));
+check("day 15 asks for the early read (stage mid)", json(run("2026-09-16", "brief", "T")).due_for_measure[0]?.stage === "mid");
+const mid = run("2026-09-16", "measure", "T", "--audit", auditT, "--gsc", gscT7, "--gsc-days", "7");
+check("day 15: the early 7-day read is recorded but flagged as not counted", /early read/.test(mid), mid);
+check("day 15: a 28-day file cannot give a verdict yet", /Nothing due/.test(run("2026-09-16", "measure", "T", "--audit", auditT, "--gsc", gscT28, "--gsc-days", "28")));
+check("day 30: the full verdict is still due after the early looks", json(run("2026-10-01", "brief", "T")).due_for_measure[0]?.stage === "full");
+const full = run("2026-10-01", "measure", "T", "--audit", auditT, "--gsc", gscT28, "--gsc-days", "28");
+check("day 30: the 28-day verdict is recorded (improved) and counted once", /28-day measure\): owner kept, Google improved$/.test(full.trim().split("\n")[0]) && json(run("2026-10-01", "brief", "T")).due_for_measure.length === 0, full);
+check("nothing is measured twice", /Nothing due/.test(run("2026-10-02", "measure", "T", "--audit", auditT, "--gsc", gscT28)));
+
+// an apostrophe in a title must not break logging (JSON on stdin), and a run logged BEFORE publishing is visible as pending until it is closed
+const pend = runIn("2026-10-05", JSON.stringify({ site: "P", name: "Pizza", pending: true, fixes: [{ page: "/", type: "title_short", before: "Pizza", after: "Luigi's Pizza - Wood-fired in Lyon" }], edits: [{ path: "src/pages/index.astro", find: 'title="Pizza"', replace: 'title="Luigi\'s Pizza - Wood-fired in Lyon"' }] }), "add", "-");
+check("an apostrophe in a title is fine on stdin", /PENDING/.test(pend), pend);
+check("a pending run shows in the brief (a run that died after editing is not forgotten)", json(run("2026-10-05", "brief", "P")).pending_run?.fixes === 1);
+run("2026-10-05", "finish", "P", "--published", "--live-verified");
+check("finish closes it", json(run("2026-10-05", "brief", "P")).pending_run === undefined && json(run("2026-10-05", "brief", "P")).touched_last_14d.length === 1);
+
+
+// the schedule lines we print must use flags the installed agent CLIs really have (a flag that no longer exists silently breaks the cron job). Skipped for agents not installed here.
+for (const [agentName, helpArgs] of [["claude", ["--help"]], ["codex", ["exec", "--help"]], ["grok", ["--help"]]]) {
+  let helpText = null;
+  try { helpText = execFileSync(agentName, helpArgs, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); } catch { continue; }
+  const line = execFileSync("node", [path.join(HERE, "seo-schedule.mjs"), agentName], { encoding: "utf8" }).split("\n").find((l) => /^7 7 /.test(l)) || "";
+  const flags = [...new Set([...line.matchAll(/ (--[a-z][a-z-]+)/g)].map((m) => m[1]))];
+  const HIDDEN_BUT_ACCEPTED = ["--max-turns"]; // claude accepts --max-turns but does not list it in --help (an unknown option errors, this one does not: checked 2026-10-18)
+  const bad = flags.filter((f) => !helpText.includes(f) && !(agentName === "claude" && HIDDEN_BUT_ACCEPTED.includes(f)));
+  check(`schedule line for ${agentName}: every flag exists in the installed CLI (${flags.join(" ")})`, flags.length > 0 && bad.length === 0, `unknown: ${bad.join(" ")}`);
+}
 
 // pause is respected
 run("2026-10-11", "mode", "A", "pause");
@@ -148,16 +187,24 @@ const fromConnector = json(runF(H3, "2026-10-10T12:00:00Z", "brief", "hotel.klea
 check("a connector-written memory is understood by the scripts (cool-down, mode, score)", fromConnector.mode === "auto" && fromConnector.touched_last_14d.includes("/|missing_alt") && fromConnector.last_score === 88, JSON.stringify(fromConnector));
 check("the weekly report reads it too", /checklist 50 -> 88\/100/.test(runF(H3, "2026-10-12T12:00:00Z", "weekly", "--days", "7").out));
 fs.rmSync(H3, { recursive: true, force: true });
+
+// a run the owner asked us to take back is not "the owner rewrote our wording": it must not pollute the style guide
+const auditU = tmp("u.json", { pages: [{ route: "/", title: "Hotel", description: "x" }] });
+const mU = runF(H1, "2026-10-12T12:00:00Z", "measure", "116838", "--audit", auditU);
+check("an undone run is never counted as the owner's preferred wording", !/overridden/.test(mU.out) && !JSON.stringify(json(runF(H1, "2026-10-12T12:01:00Z", "brief", "116838").out).owner_style).includes("Hotel"), mU.out);
 fs.rmSync(FAKE_DIR, { recursive: true, force: true });
 
 // ── part 3: the free URL audit against a local fixture site (deterministic, no internet) ──────────────────────────────────────────────────────────────
 const page = (title, desc, body, extraHead = "") => `<!doctype html><html lang="en"><head>${title ? `<title>${title}</title>` : ""}${desc ? `<meta name="description" content="${desc}">` : ""}<meta name="viewport" content="width=device-width"><link rel="canonical" href="http://x/">${extraHead}</head><body>${body}</body></html>`;
 const ROUTES = {
-  "/": page("Cafe Lyon", "", '<h1>Cafe</h1><a href="/about">About</a> <a href="/login">Log in</a> <a href="/missing">Menu</a> <a href="/secret">Offer</a> <a href="/index.html">Home</a><img src="/a.jpg" alt="a"><img src="/a.jpg"><img src="/b.jpg" alt="">'),
+  "/": page("Cafe Lyon", "", '<h1>Cafe</h1><a href="/about">About</a> <a href="/login">Log in</a> <a href="/missing">Menu</a> <a href="/secret">Offer</a> <a href="/index.html">Home</a> <a href="/privacy-policy">Privacy</a> <a href="/menu">Menu</a> <a href="/min">Min</a><img src="/a.jpg" alt="a"><img src="/a.jpg"><img src="/b.jpg" alt="">'),
   "/about": page("テスト用の日本語タイトルです長め", "これは日本語の説明文です。この説明は幅で数えると七十文字を超える長さがあり、検索結果に十分な情報を載せます。", "<h1>私たち</h1>" + "word ".repeat(150)),
   "/login": page("", "", "<form></form>"),
   "/secret": page("Private offer for friends of the cafe", "A private offer page that is deliberately hidden from Google on purpose.", "<h1>Offer</h1>" + "word ".repeat(150), '<meta name="robots" content="noindex">'),
   "/index.html": page("Cafe Lyon", "", '<h1>Cafe</h1>'),
+  "/min": '<!doctype html><html lang=en><head><title>Minified page with a long enough title here</title><meta name=description content="A minified page whose attributes are not quoted, with a description long enough to pass the length check."><meta name=viewport content=width=device-width><link rel=canonical href=https://x/min></head><body><h1>Min</h1><a href=/about>About</a><img src=/m.jpg alt=Pool>'+"word ".repeat(150)+"</body></html>",
+  "/privacy-policy": page("", "", "<h1>Privacy</h1>" + "word ".repeat(40)),
+  "/menu": page("Roasting Beans Cafe Lyon Menu", "Our full menu of coffee, tea and pastries baked every morning in Lyon, with prices and allergens listed.", "<h1>Menu</h1>" + "word ".repeat(150)),
 };
 const server = http.createServer((req, res) => { const r = ROUTES[req.url.split("?")[0]]; if (!r) { res.statusCode = req.url === "/robots.txt" || req.url === "/sitemap.xml" ? 404 : 404; res.end("nope"); return; } res.setHeader("content-type", "text/html"); res.end(r); });
 await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
@@ -173,6 +220,9 @@ check("URL audit: a noindex page is a note for the owner, not a fix", !has("/sec
 check("URL audit: a repeated image counts once, and one without alt is caught", A.findings.some((f) => f.page === "/" && f.type === "missing_alt" && /1 of 2/.test(f.detail)), JSON.stringify(A.findings.filter((f) => f.type === "missing_alt")));
 check("URL audit: Japanese title and description are measured by width, not characters", !has("/about", "title_short") && !has("/about", "description_short"), JSON.stringify(A.findings.filter((f) => f.page === "/about")));
 check("URL audit: the TOP 3 contain no utility page", A.top3.every((f) => !/login/.test(f.page)));
+check("URL audit: minified HTML with unquoted attributes is read correctly (no false alarms)", !A.findings.some((f) => f.page === "/min" && f.type !== "no_page_schema"), JSON.stringify(A.findings.filter((f) => f.page === "/min")));
+check("URL audit: legal pages are ignored like login pages", !A.findings.some((f) => f.page === "/privacy-policy"));
+check("URL audit: a title 1 character under the limit is a note, not a priority", A.findings.some((f) => f.page === "/menu" && f.type === "title_short" && f.impact <= 2) && A.top3.every((f) => f.page !== "/menu"), JSON.stringify(A.findings.filter((f) => f.page === "/menu")));
 check("URL audit: fast", Date.now() - t0 < 20000);
  for (const d of [H1, H2]) fs.rmSync(d, { recursive: true, force: true });
 

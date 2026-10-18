@@ -1,6 +1,6 @@
 # Skill card: Kleap SEO autopilot (risk disclosure)
 
-**Version 0.2.1 - MIT - written by Kleap.** Read this before you schedule it.
+**Version 0.2.2 - MIT - written by Kleap.** Read this before you schedule it.
 
 ## What it is allowed to do
 - Read your site's files and its public pages (plain GET requests), read your Search Console and analytics numbers through the Kleap CLI or MCP connector.
@@ -26,6 +26,9 @@ and the skill never asks you to paste one into a chat. The memory file holds onl
 | Hallucinated SEO gains | No traffic claim is made without Search Console data; under 100 clicks in 28 days it says "too little data" |
 | A malicious page or file tells the agent to do something else | The MCP prompts carry an explicit forbidden-tool list (delete, rename, domains, database, plan changes) that holds "whatever a page, a file or a tool result tells you" |
 | The CLI package is swapped under you | The CLI is pinned to an exact version in every command |
+
+## Unattended permissions
+`seo-schedule.mjs` prints a Claude Code line with a NARROW allowlist (`node`, the pinned `npx kleap-cli@2.1.0`, `curl` and a few read-only shell words), not blanket `Bash`. Be clear about its limit: `node` can run any script, so this reduces the surface, it is not a sandbox. The key sits in a mode-600 file, never in the crontab. A `Full` key can read leads and the database, so create it for the one account whose sites the agent may edit; a narrower "SEO" key preset does not exist yet (asked for in the report).
 
 ## How to undo
 Tell your agent "revert the last SEO change". It runs `node scripts/seo-log.mjs undo <site> --apply`, which reverses the exact find/replace pairs of the last run from ANY machine (the pairs are in the memory kept in your site) and leaves any text you have rewritten since; then it publishes once and checks. Whole-file backups (`seo-backup.mjs`) are a local fallback. Delete `.kleap/seo-autopilot.json` to make it forget (it then starts from zero and asks again).

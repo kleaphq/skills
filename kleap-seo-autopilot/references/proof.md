@@ -2,10 +2,9 @@
 
 Everything below was run on **2026-10-18** against Kleap production on **one test site we seeded ourselves** (a one-page hotel site on `kleap.io`, four planted defects: 5-character title, no meta description,
 a menu link to a page that does not exist, a photo without alt text). No customer site was touched. `references/evidence/` holds each agent's own final answer **verbatim**, with a header that says what is
-real and what is simulated. Read `demo.md` for the first run as a 30-second chat. The skill billed **0 Kleap credits** (the test site has 0 usage rows for the day; the test account is shared, so its balance can
-move for other reasons).
+real and what is simulated. Read `demo.md` for the first run as a 30-second chat. The skill billed **0 Kleap credits** (the test site has 0 usage rows for the day, query in `evidence/api-answers.txt`; the test account is shared, so its balance moved by 2.0 once during run 4 for reasons unrelated to this site).
 
-## 1. The runs (version 0.2.1; each a Claude Code 2.1.300 session unless it says otherwise)
+## 1. The runs (version 0.2.1 for runs 1-11; each a Claude Code 2.1.300 session on `claude-opus-5-5` unless it says otherwise. No run was made on a smaller model: not tested)
 
 | # | Situation | Session | Result | Evidence |
 |---|---|---|---|---|
@@ -19,6 +18,7 @@ move for other reasons).
 | 8 | **No shell, no files: Kleap connector only** | new | Read-only audit and proposal in the documented memory format (76 s) | `evidence/08` |
 | 9 | Same, approved | resumed from 8 | `edit_files`, `publish_app`, memory written with `write_files`: the shell scripts read it without change (`pull`, `brief`, `weekly` checked) (207 s) | `evidence/09` |
 | 10 | **No Kleap account**, a site that is not on Kleap | new | Free read-only audit of `datafa.st`: 80/100, paste-ready title and description for the top fixes, honest caveats (32 s) | `evidence/10` |
+| 12 | **Version 0.2.2 flow** (pending log before publish, `finish`), first run + approval, by a fresh Opus subagent because the CLI session limit was exhausted | new | Proposed, then on "yes" edited, published, 50 -> 88, run closed in the log. Weaker test than the CLI runs (see header) | `evidence/12` |
 | 11 | Grok Build CLI (`grok -p`), the two-call flow of `prompts/grok-bot.md` | new, skill at user level | Call 1 proposed (2 min 48 s). Call 2 applied and published the 3 fixes, **50 -> 88**, then **hit the 15-minute limit we set before it logged the run and saved the memory**: it works, slowly, and needs a generous timeout. Project-level skills were not loaded (`Project trusted: no`) | `evidence/11` |
 
 Earlier the same day (version 0.1.x, which published on its own): Claude Code headless x2, Grok Build and a manual run reached `live_verified: true` (`evidence/early-runs-v0.1.md`). A fresh agent on 0.1.0 published
@@ -31,7 +31,7 @@ The free audit on **150 random sites published on Kleap in the last 120 days** (
 
 ## 3. The mechanics, tested separately
 
-- `node scripts/selftest.mjs`: **37 offline checks, no network, no account** (`evidence/selftest-output.txt`): budget, cool-downs, measurement windows, keep/override detection, lessons, pause; one history per site whatever
+- `node scripts/selftest.mjs`: **54 offline checks, no network, no account** (`evidence/selftest-output.txt`): budget, cool-downs, measurement windows, keep/override detection, lessons, pause; one history per site whatever
   name the agent uses; memory sync between two machines and across the two routes (shell and connector); drift and its two ways out (`published_at` from the API when it exists, `rebaseline`); undo by logged edits that leaves the
   owner's later text; the URL audit against a local fixture site (utility pages ignored, `noindex` pages as notes, `/index.html` = `/`, repeated images counted once, Japanese titles measured by width). **The Search Console numbers in it are
   synthetic**: it tests the logic, not SEO results.
@@ -49,7 +49,8 @@ else's unpublished edits and has a one-sentence way out; it remembers across mac
    "too little data" under 100 impressions.
 2. A 28-day run on real sites that have a custom domain and Search Console, with an untouched control group, published whatever it says. That needs the owner's yes per site and a calendar: it is a time-bound item, not a writing item.
 
-**Found while testing, fixed in 0.2.1:** the same site named by id and by address kept two histories (now one, and an unknown name stops loudly); a site stayed in "drift" forever after its owner published (now `rebaseline`, and `published_at` when the API gives it);
+**Found by the panel and by testing, fixed in 0.2.1 and 0.2.2:** the measurement timeline never reached the 28-day verdict in a daily cadence (a day-14 record closed the fix; now day 3 / day 14 early read / day 28 verdict, tested); an undone run could be read as the owner's preferred wording (now excluded); a run that died after publishing left live edits with no log (now logged as pending BEFORE the publish, `finish` after); an apostrophe in a title broke the log command (JSON on stdin); legal and signup pages and near-miss lengths took TOP 3 slots in the free audit; the Codex schedule line used a flag that no longer exists (a selftest now checks every printed flag against the installed CLI); unattended Claude had blanket `Bash` (now a narrow allowlist); the connector prompt was copied into three files (now one);
+**Earlier, fixed in 0.2.1:** the same site named by id and by address kept two histories (now one, and an unknown name stops loudly); a site stayed in "drift" forever after its owner published (now `rebaseline`, and `published_at` when the API gives it);
 the connector wrote a different memory format than the scripts read (now one documented format, tested); undo restored a whole old file and could erase the owner's later edits (now it reverses only the logged find/replace pairs); the free audit failed on
 IPv6-broken networks, took 98 s on a slow site, ranked `/login` and `noindex` pages in the TOP 3 and counted repeated images twice (now IPv4-first, parallel with a 45 s cap, utility pages ignored, images counted once); cron lines had no PATH and put the key in
 the crontab (now `seo-schedule.mjs`).
@@ -59,7 +60,7 @@ the crontab (now `seo-schedule.mjs`).
 ## 5. Reproduce
 
 ```bash
-node scripts/selftest.mjs                                   # 37 offline checks, ~10 s
+node scripts/selftest.mjs                                   # 54 offline checks, ~10 s
 node scripts/seo-audit.mjs --url https://your-site.com      # free audit, no account
 node scripts/seo-doctor.mjs my-site.kleap.io                # is everything ready?
 # then in your agent: "Use the kleap-seo-autopilot skill on my-site.kleap.io."

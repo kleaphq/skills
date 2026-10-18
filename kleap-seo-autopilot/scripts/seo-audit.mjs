@@ -39,6 +39,8 @@ const MAX_PAGES = Number(opt("--max-pages", EXTERNAL_URL ? 12 : 60));
 const wlen = (s) => [...String(s)].reduce((n, c) => n + (/[\u1100-\u11ff\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]/.test(c) ? 2 : 1), 0);
 // 404/410/5xx = the page is gone or broken. 401/403/429/999 or no answer = the site refuses OUR bot (rate limit, WAF): that is not a dead page, so it is never reported as one
 const isGone = (st) => st === 404 || st === 410 || (st >= 500 && st <= 599);
+// A title of 29 characters is not "too short" the way 5 is: the closer to the limit, the lower the priority (so a near miss never takes a TOP 3 slot from a real problem)
+const shortImpact = (n, min) => (n < min / 2 ? 6 : n < min * 0.85 ? 5 : 2);
 const T = {
   titleMin: 30, titleMax: 60,
   descMin: 70, descMax: 160,
@@ -154,8 +156,8 @@ function render(report, { external }) {
     growth.forEach((g) => console.log(`  - ${g.type}: ${g.why}`));
   }
   if (external) {
-    console.log(`\nFixing these automatically (edit, publish, check it is live, undo on failure) works on sites hosted on Kleap: https://kleap.co`);
-    console.log(`Already on Kleap? npx -y kleap-cli@2.1.0 auth login  — then run this skill on your site without --url.`);
+    console.log(`\nFixing these automatically (edit, publish, check it is live, undo on failure) works on sites hosted on Kleap: https://kleap.co/?utm_source=seo-autopilot&utm_medium=free-audit&utm_campaign=skill`);
+    console.log(`Already on Kleap? npx -y kleap-cli@2.1.0 auth login  — then run this skill on your site without --url. Want a new site built and hosted for you? Say so: the sibling skill kleap-build builds one from a description, and this skill takes over once it is published.`);
   }
 }
 
@@ -163,7 +165,7 @@ function render(report, { external }) {
 //  EXTERNAL MODE: any public site, no account
 // ═══════════════════════════════════════════════════════════════════════════════════════════
 // Pages that exist for the product, not for Google: never worth a title rewrite, never in the TOP 3 (a login page is not the owner's problem).
-const UTILITY = /^\/(log-?in|sign-?in|sign-?up|register|account|accounts|billing|checkout|cart|admin|dashboard|access|blocked|verify[\w-]*|unsubscribe|password|reset[\w-]*|thank-?you|thanks|confirm[\w-]*|oauth|auth|api|cdn-cgi|404|preferences|settings|invite)(\/|$)/i;
+const UTILITY = /^\/(log-?in|sign-?in|sign-?up|create-account|register|account|accounts|billing|checkout|cart|admin|dashboard|access|blocked|verify[\w-]*|unsubscribe|password|reset[\w-]*|thank-?you|thanks|confirm[\w-]*|oauth|auth|api|cdn-cgi|404|preferences|settings|invite|privacy[\w-]*|terms[\w-]*|tos|dpa|legal|licen[sc]e|cookies?[\w-]*|imprint|impressum|gdpr|disclaimer|refunds?[\w-]*|subprocessors|accessibility)(\/|$)/i;
 
 async function externalAudit() {
   const UA = { "user-agent": "kleap-seo-autopilot/0.3 (read-only audit; https://kleap.co)" };
@@ -197,24 +199,32 @@ async function externalAudit() {
   const sameSite = (u) => { try { const a = new URL(u).hostname.replace(/^www\./, ""); return a === new URL(origin).hostname.replace(/^www\./, ""); } catch { return false; } };
   const norm = (u) => { const x = new URL(u); x.hash = ""; x.search = ""; x.pathname = x.pathname.replace(/\/index(\.(?:html?|php))?$/i, "/"); return x.origin + (x.pathname.length > 1 ? x.pathname.replace(/\/+$/, "") : "/"); }; // /index.html IS the folder URL: one page, not two
 
+  // attributes of one tag, quoted ("x", 'x') OR unquoted (minified HTML: <meta name=description content=Hello>), names lower-cased
+  const attrsOf = (tagText) => {
+    const out = {};
+    for (const m of tagText.replace(/^<\s*[\w-]+/, "").matchAll(/([^\s"'<>\/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g)) out[m[1].toLowerCase()] = m[2] ?? m[3] ?? m[4] ?? "";
+    return out;
+  };
   const parse = (html) => {
     const tag = (re) => { const m = html.match(re); return m ? decode(m[1].trim()) : null; };
-    const metas = [...html.matchAll(/<meta\b[^>]*>/gi)].map((m) => m[0]);
-    const meta = (key, val) => { for (const m of metas) { const k = (m.match(new RegExp(`\\b${key}\\s*=\\s*["']([^"']*)["']`, "i")) || [])[1]; if (k && k.toLowerCase() === val) { const c = (m.match(/\bcontent\s*=\s*"([^"]*)"|\bcontent\s*=\s*'([^']*)'/i) || []); return decode((c[1] ?? c[2] ?? "").trim()); } } return null; };
-    // images, counted once per distinct src (carousels and <picture> repeat the same image many times): missing alt = no occurrence of that src carries an alt attribute
+    const metas = [...html.matchAll(/<meta\b[^>]*>/gi)].map((m) => attrsOf(m[0]));
+    const meta = (key, val) => { const m = metas.find((a) => String(a[key] ?? "").toLowerCase() === val); return m ? decode(String(m.content ?? "").trim()) : null; };
+    const linkRel = (rel) => { for (const m of html.matchAll(/<link\b[^>]*>/gi)) { const a = attrsOf(m[0]); if (String(a.rel ?? "").toLowerCase().split(/\s+/).includes(rel)) return a.href || null; } return null; };
+    // images, counted once per distinct src (carousels and <picture> repeat the same image many times): an image is fine only if EVERY occurrence of it has alt
     const bySrc = new Map();
     for (const t of [...html.matchAll(/<img\b[^>]*>/gi)].map((m) => m[0])) {
-      const src = (t.match(/\b(?:data-src|src)\s*=\s*["']([^"']+)["']/i) || [])[1] || t;
-      bySrc.set(src, (bySrc.has(src) ? bySrc.get(src) : true) && /\balt\s*=/i.test(t)); // an image is fine only if EVERY occurrence of it has alt
+      const a = attrsOf(t); const src = a["data-src"] || a.src || t;
+      bySrc.set(src, (bySrc.has(src) ? bySrc.get(src) : true) && "alt" in a);
     }
     const body = html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<!--[\s\S]*?-->/g, " ");
-    const links = [...html.matchAll(/<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)].map((m) => (m[1] ?? m[2]).trim());
+    const links = [...html.matchAll(/<a\b[^>]*>/gi)].map((m) => attrsOf(m[0]).href).filter((h) => h != null).map((h) => h.trim());
+    const htmlTag = (html.match(/<html\b[^>]*>/i) || [""])[0];
     return {
       title: tag(/<title[^>]*>([\s\S]*?)<\/title>/i), description: meta("name", "description"),
-      canonical: (html.match(/<link\b[^>]*rel\s*=\s*["']canonical["'][^>]*href\s*=\s*["']([^"']+)["']/i) || [])[1] || null,
-      lang: (html.match(/<html\b[^>]*\blang\s*=\s*["']([^"']+)["']/i) || [])[1] || null,
+      canonical: linkRel("canonical"),
+      lang: htmlTag ? attrsOf(htmlTag).lang || null : null,
       viewport: meta("name", "viewport"), robots: meta("name", "robots"), ogImage: meta("property", "og:image"),
-      h1: (html.match(/<h1\b/gi) || []).length, imgs: bySrc.size, imgsMissingAlt: [...bySrc.values()].filter((hasAlt) => !hasAlt).length,
+      h1: (html.match(/<h1\b/gi) || []).length, imgs: bySrc.size, imgsMissingAlt: [...bySrc.values()].filter((ok) => !ok).length,
       jsonld: (html.match(/<script[^>]+application\/ld\+json/gi) || []).length,
       words: words(decode(body.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim()), links,
       text: decode(body.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").toLowerCase(),
@@ -295,14 +305,14 @@ async function externalAudit() {
     if (UTILITY.test(r)) continue;
     if (!p.title) add(r, "missing_title", 10, "no <title>", "add a unique, keyword-led title (30-60 chars)");
     else {
-      if (wlen(p.title) < T.titleMin) add(r, "title_short", 5, `title is ${wlen(p.title)} chars: "${p.title}"`, `rewrite to ${T.titleMin}-${T.titleMax} chars with the main keyword + business/location`);
+      if (wlen(p.title) < T.titleMin) add(r, "title_short", shortImpact(wlen(p.title), T.titleMin), `title is ${wlen(p.title)} chars: "${p.title}"`, `rewrite to ${T.titleMin}-${T.titleMax} chars with the main keyword + business/location`);
       if (wlen(p.title) > T.titleMax) add(r, "title_long", 4, `title is ${wlen(p.title)} chars and will be truncated: "${p.title}"`, `shorten to <= ${T.titleMax} chars, keyword first`);
       const k = p.title.toLowerCase();
       if (titleCount[k] > 1 && !dupReported.has("t" + k)) { dupReported.add("t" + k); add(okPages.filter(([, q]) => q.title?.toLowerCase() === k).map(([x]) => route(x)).join(" + "), "duplicate_title", 8, `same title on ${titleCount[k]} pages: "${p.title}"`, "give each page its own title"); }
     }
     if (!p.description) add(r, "missing_description", 10, "no meta description (Google will invent a snippet)", "write a 70-160 char description that sells the click");
     else {
-      if (wlen(p.description) < T.descMin) add(r, "description_short", 5, `description is ${wlen(p.description)} chars`, `expand to ${T.descMin}-${T.descMax} chars`);
+      if (wlen(p.description) < T.descMin) add(r, "description_short", shortImpact(wlen(p.description), T.descMin), `description is ${wlen(p.description)} chars`, `expand to ${T.descMin}-${T.descMax} chars`);
       if (wlen(p.description) > T.descMax) add(r, "description_long", 3, `description is ${wlen(p.description)} chars and will be cut`, `trim to <= ${T.descMax}`);
       const k = p.description.toLowerCase();
       if (descCount[k] > 1 && !dupReported.has("d" + k)) { dupReported.add("d" + k); add(okPages.filter(([, q]) => q.description?.toLowerCase() === k).map(([x]) => route(x)).join(" + "), "duplicate_description", 7, `same description on ${descCount[k]} pages`, "give each page its own description"); }
@@ -503,7 +513,7 @@ for (const p of pages) {
   if (!t || (t.kind === "literal" && !t.value.trim())) add(r, "missing_title", 10, "no title passed to the layout (falls back to the bare site name)", "add a unique, keyword-led title (30-60 chars)");
   else if (t.kind === "literal") {
     const n = wlen(t.value);
-    if (n < T.titleMin) add(r, "title_short", 5, `title is ${n} chars: "${t.value}"`, `rewrite to ${T.titleMin}-${T.titleMax} chars with the main keyword + business/location`);
+    if (n < T.titleMin) add(r, "title_short", shortImpact(n, T.titleMin), `title is ${n} chars: "${t.value}"`, `rewrite to ${T.titleMin}-${T.titleMax} chars with the main keyword + business/location`);
     if (n > T.titleMax) add(r, "title_long", 4, `title is ${n} chars and will be truncated: "${t.value}"`, `shorten to <= ${T.titleMax} chars, keyword first`);
     const tk = "t:" + t.value.toLowerCase();
     if (titleCount[t.value.toLowerCase()] > 1 && !dupReported.has(tk)) { dupReported.add(tk); add(routesWith((q) => q.title, t.value.toLowerCase()).join(" + "), "duplicate_title", 8, `same title on ${titleCount[t.value.toLowerCase()]} pages: "${t.value}"`, "give each page its own title"); }
@@ -511,7 +521,7 @@ for (const p of pages) {
   if (!d || (d.kind === "literal" && !d.value.trim())) add(r, "missing_description", 10, "no meta description passed to the layout (Google will invent a snippet)", "write a 70-160 char description that sells the click");
   else if (d.kind === "literal") {
     const n = wlen(d.value);
-    if (n < T.descMin) add(r, "description_short", 5, `description is ${n} chars: "${d.value}"`, `expand to ${T.descMin}-${T.descMax} chars with a benefit and a call to action`);
+    if (n < T.descMin) add(r, "description_short", shortImpact(n, T.descMin), `description is ${n} chars: "${d.value}"`, `expand to ${T.descMin}-${T.descMax} chars with a benefit and a call to action`);
     if (n > T.descMax) add(r, "description_long", 3, `description is ${n} chars and will be cut`, `trim to <= ${T.descMax} chars`);
     const dk = "d:" + d.value.toLowerCase();
     if (descCount[d.value.toLowerCase()] > 1 && !dupReported.has(dk)) { dupReported.add(dk); add(routesWith((q) => q.description, d.value.toLowerCase()).join(" + "), "duplicate_description", 7, `same description on ${descCount[d.value.toLowerCase()]} pages`, "give each page its own description"); }

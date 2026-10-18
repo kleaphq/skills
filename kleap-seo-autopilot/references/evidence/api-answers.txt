@@ -1,0 +1,12 @@
+Real API answers, 2026-10-18, test site 116838 (a *.kleap.io address), kleap-cli 2.1.0:
+
+$ npx -y kleap-cli@2.1.0 search-console 116838 --json
+{"app_id":116838,"period":"28d","clicks":0,"impressions":0,"ctr":0,"position":0,"top_queries":[],"top_pages":[],"connected":false,"site_selected":false,"site_url":null,"message":"Google Search Console isn't connected for this site. The owner connects it from the site's options in Kleap (Integrations → Search Console) — it can't be connected from here."}
+
+$ npx -y kleap-cli@2.1.0 search-console connect 116838 --json
+{"app_id":116838,"connected":false,"site_selected":false,"requires_custom_domain":true,"custom_domain":null,"consent_url":null,"message":"Search Console tracks a domain the user owns, and this site only has its {slug}.kleap.io address. Connect a custom domain to the site first (connect_domain), publish, then start this again — connecting Google before that grants access to nothing."}
+
+$ npx -y kleap-cli@2.1.0 publish 116838 --json (field names only)
+app_id id name slug production_url screenshot_url status published_at report   <- published_at IS returned by publish; `status` does not return it
+
+Credits: usage_logs rows for app_id 116838 in the 8 hours of the runs = 0 (read-only SQL: select count(*), sum(credits_used) from usage_logs where app_id=116838 and created_at > now() - interval '8 hours'). The balance of the shared test account moved by 2.0 during one run (it3-d2) because other agents use that account; no row names this site.

@@ -23,7 +23,7 @@ node ~/.openclaw/skills/kleap-seo-autopilot/scripts/seo-doctor.mjs my-site.kleap
 
 # 4. the sites, then schedule it every day at 07:07 (isolated session, summary sent to your chat)
 mkdir -p ~/.kleap-seo && printf '%s\n' my-site.kleap.io rivera-family-plumbing.kleap.io > ~/.kleap-seo/sites.txt
-openclaw cron add --name "Kleap SEO autopilot" --cron "7 7 * * *" --tz Europe/Paris --session isolated --announce \
+openclaw cron add --name "Kleap SEO autopilot" --cron "7 7 * * *" --tz <your timezone, e.g. Europe/Paris> --session isolated --announce \
   --timeout-seconds 1800 \
   --message "Use the kleap-seo-autopilot skill: run its autopilot for the sites in ~/.kleap-seo/sites.txt, then give me the owner report. On Mondays also give the weekly report and one growth idea."
 openclaw cron run <job-id>        # run it once now to check (debug)

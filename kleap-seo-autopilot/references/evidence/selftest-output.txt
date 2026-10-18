@@ -9,6 +9,19 @@ ok   two improvements and no loss -> double down
 ok   an overridden fix is not counted as good or bad
 ok   the owner's wording becomes the style guide
 ok   under 100 impressions = too little data
+ok   day 3: a first look says whether the owner kept it, nothing about Google
+ok   day 15 asks for the early read (stage mid)
+ok   day 15: the early 7-day read is recorded but flagged as not counted
+ok   day 15: a 28-day file cannot give a verdict yet
+ok   day 30: the full verdict is still due after the early looks
+ok   day 30: the 28-day verdict is recorded (improved) and counted once
+ok   nothing is measured twice
+ok   an apostrophe in a title is fine on stdin
+ok   a pending run shows in the brief (a run that died after editing is not forgotten)
+ok   finish closes it
+ok   schedule line for claude: every flag exists in the installed CLI (--permission-mode --allowed --max-turns)
+ok   schedule line for codex: every flag exists in the installed CLI (--skip-git-repo-check --sandbox)
+ok   schedule line for grok: every flag exists in the installed CLI (--always-approve --max-turns --disable-web-search)
 ok   pause means zero fixes left today
 ok   weekly report runs
 ok   a site named by its address shares the history of its id
@@ -27,6 +40,7 @@ ok   an undone pair is blocked for 30 days
 ok   undo leaves text the owner rewrote alone
 ok   a connector-written memory is understood by the scripts (cool-down, mode, score)
 ok   the weekly report reads it too
+ok   an undone run is never counted as the owner's preferred wording
 ok   URL audit: a dead link is reported once, on the page that has it
 ok   URL audit: login/utility pages are never findings
 ok   URL audit: /index.html is the homepage, not a duplicate of it
@@ -34,6 +48,9 @@ ok   URL audit: a noindex page is a note for the owner, not a fix
 ok   URL audit: a repeated image counts once, and one without alt is caught
 ok   URL audit: Japanese title and description are measured by width, not characters
 ok   URL audit: the TOP 3 contain no utility page
+ok   URL audit: minified HTML with unquoted attributes is read correctly (no false alarms)
+ok   URL audit: legal pages are ignored like login pages
+ok   URL audit: a title 1 character under the limit is a note, not a priority
 ok   URL audit: fast
 
 all checks passed (synthetic data: this tests the mechanics, not SEO results)

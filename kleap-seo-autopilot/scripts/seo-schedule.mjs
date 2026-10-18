@@ -12,10 +12,13 @@ import path from "node:path";
 
 const [agent, ...rest] = process.argv.slice(2);
 const opt = (n, d) => (rest.includes(n) ? rest[rest.indexOf(n) + 1] : d);
+// Claude Code: NOT blanket `Bash`. The loop needs node (the scripts), the pinned Kleap CLI, curl (to look at the live page) and a few read-only shell words, nothing else.
+const CLAUDE_TOOLS = ["Bash(node:*)", "Bash(npx -y kleap-cli@2.1.0:*)", "Bash(curl:*)", "Bash(cd:*)", "Bash(export:*)", "Bash(echo:*)", "Bash(printf:*)", "Bash(ls:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(grep:*)", "Bash(date:*)", "Bash(mkdir:*)", "Bash(timeout:*)", "Read"];
 const AGENTS = {
-  claude: (sentence) => ({ bin: "claude", args: `-p "${sentence}" --permission-mode acceptEdits --allowedTools "Bash" --max-turns 60` }),
-  codex: (sentence) => ({ bin: "codex", args: `exec --full-auto "${sentence}"` }),
-  grok: (sentence) => ({ bin: "grok", args: `-p "${sentence}" --always-approve --max-turns 40` }),
+  claude: (sentence) => ({ bin: "claude", args: `-p "${sentence}" --permission-mode acceptEdits --allowedTools ${CLAUDE_TOOLS.map((t) => `"${t}"`).join(" ")} --max-turns 60` }),
+  // checked against codex-cli 0.163.0 (`codex exec --help`): there is no --full-auto any more; the workspace sandbox blocks the network unless it is allowed. Run live for the free audit only.
+  codex: (sentence) => ({ bin: "codex", args: `exec --skip-git-repo-check --sandbox workspace-write -c sandbox_workspace_write.network_access=true "${sentence}"` }),
+  grok: (sentence) => ({ bin: "grok", args: `-p "${sentence}" --always-approve --max-turns 40 --disable-web-search` }),
   openclaw: null, hermes: null,
 };
 if (!agent || !(agent in AGENTS)) { console.error("usage: node seo-schedule.mjs <claude|codex|grok|openclaw|hermes> [--time \"7 7 * * *\"] [--sites FILE] [--launchd]"); process.exit(2); }

@@ -6,7 +6,7 @@ description: >-
   seen but not clicked. It asks before the first publish, refuses to ship your unfinished edits, remembers inside your site and
   learns from the results. Use when the user says "improve my SEO", "SEO autopilot", "audit my site", "why am I not on Google",
   or schedules a recurring agent task on a site built with Kleap.
-version: 0.2.1
+version: 0.2.2
 license: MIT
 compatibility: "Claude Code, OpenClaw, Hermes Agent, Codex, Grok Build and any Agent Skills client with a shell and Node >= 18. Agents without a shell (ChatGPT, Claude.ai, Grok API) run the same loop through the Kleap MCP connector: see prompts/."
 metadata:
@@ -35,16 +35,7 @@ It asks before the first publish, remembers what it did inside your site, checks
 | **1 Fix** | Fixes the top 3, publishes, verifies it is live, undoes failures, reports | A site on Kleap + `npx -y kleap-cli@2.1.0 auth login` |
 | **2 Grow** | Once the basics pass: one proposal a week (new page, FAQ, answer to a Google query), only with the owner's yes | Level 1 |
 
-**Real runs** (a test site we seeded, 2026-10-18; a new Claude Code session that had only this skill, or only the Kleap connector; skill credits billed: 0). Transcripts and honest labels: `references/proof.md`.
-
-| Run | What happened |
-|---|---|
-| 1. First run (97 s) | Audited, showed 3 fixes as before -> after, **asked**, published nothing |
-| 2. Owner says "yes" (117 s) | Backup, edits, one publish, `live_verified: true`, served page checked. Checklist **50 -> 88** |
-| 3. Next day on an empty machine (clock set to the next day, 274 s) | Pulled its memory from the site, fixed the last item, **88 -> 100**, proposed growth ideas without building them |
-| 4. Revert from yet another empty machine | Undid exactly its last edit from the memory in the site (no local backup), republished, left the earlier fixes |
-| 5. Owner left unpublished edits | **Refused to publish** them, named them, offered 3 ways forward; after the owner published, one sentence re-baselined it |
-| 6. Connector only (no shell, no files) | Same loop through MCP tools; the memory it wrote is read by the scripts |
+**Proof, labeled (a test site we seeded, 2026-10-18; each a fresh agent session that had only this skill (four were follow-up turns of an earlier session, and "empty machine" means the same Mac with an empty memory folder); `references/proof.md` has the transcripts and what is simulated):** asked first (97 s), then on "yes" fixed and published in 2 minutes (checklist **50 -> 88**); the next day, with the clock set forward and an empty memory folder, it read its memory from the site and finished (**88 -> 100**); with the owner's unpublished edits in the site it **refused to publish**; from another empty memory folder it **undid exactly its last edit**. Skill credits billed: 0.
 
 | Page | Problem | Before | After |
 |---|---|---|---|
@@ -52,10 +43,10 @@ It asks before the first publish, remembers what it did inside your site, checks
 | `/` | no meta description | *(none: Google invents a snippet)* | `Stay at Hotel Kleap Prod Check: unwind in the Deluxe Room, relax by the Rooftop Pool, and send a stay enquiry to plan your next escape.` |
 | `/` | menu link to a page that does not exist | `/spa` | link removed, text kept, owner told |
 
-**How much is there to fix?** The free audit on 150 random sites published on Kleap: 46% already score 100/100, 41% have something worth fixing first (26% a title under 30 characters, 9% a dead link, 4% no `<h1>`, 2% no meta description). So the fix loop has real work on about 4 sites in 10, then runs dry: that is why a clean site is reported as a win and followed by ONE approved growth idea a week, not by daily "fixes".
-**Not proven yet: traffic.** Google needs weeks and the first long-run results are not in. Day one proves that every change is small, visible, checked live and reversible; `references/proof.md` says what would count as proof and how this skill collects it. `node scripts/selftest.mjs` runs 37 offline checks. Risks and undo: `skill-card.md`.
+**How much is there to fix?** The free audit on 150 random Kleap sites: 46% already score 100/100, 41% have something worth fixing first. So the fix loop has real work on about 4 sites in 10, then runs dry: a clean site is reported as a win and followed by ONE approved growth idea a week.
+**Not proven yet: traffic.** Google needs weeks and no long-run result is in. Day one proves that every change is small, visible, checked live and reversible. `references/proof.md` says what would count as proof; `node scripts/selftest.mjs` runs 54 offline checks; risks and undo are in `skill-card.md`.
 
-**Try it now:** `node scripts/seo-audit.mjs --url https://your-site.com` (any public site, read-only, 3-10 seconds on a normal site; with nothing installed: `curl -fsSL https://raw.githubusercontent.com/kleaphq/skills/main/kleap-seo-autopilot/scripts/seo-audit.mjs | node - --url https://your-site.com`, one file of plain GET requests: read it first), or tell your agent: *"Use the kleap-seo-autopilot skill on my-site.kleap.io."*
+**Try it now:** `node scripts/seo-audit.mjs --url https://your-site.com` (any public site, read-only, 4-15 seconds on a normal site;), or tell your agent: *"Use the kleap-seo-autopilot skill on my-site.kleap.io."*
 Not sure it is ready on this machine? `node scripts/seo-doctor.mjs my-site.kleap.io` prints a checklist and the one next step.
 
 `SKILL_DIR` = the folder holding this file (scripts, `references/memory-format.md`, `skill-card.md`). `SEO_HOME` = `${KLEAP_SEO_HOME:-$HOME/.kleap-seo}` (a local cache of the memory). `K` = `npx -y kleap-cli@2.1.0`
@@ -113,20 +104,27 @@ node $SKILL_DIR/scripts/seo-audit.mjs $SITE --live            # checklist score,
    3. menu link /spa (no such page): link removed, "Spa" text kept
    Apply these 3 and publish? Publishing also ships any other unpublished edit in the site. (yes / change something / no)
    ```
-3. **On yes:** back up, apply, publish, verify:
+3. **On yes:** back up, apply, **log the run as pending and save it**, publish, verify, close the run:
    ```bash
    node $SKILL_DIR/scripts/seo-backup.mjs backup $SITE src/pages/index.astro           # every file you will change
    $K files cat $SITE src/pages/index.astro                                            # copy the exact old text
    $K files edit $SITE src/pages/index.astro --find "<old>" --replace "<new>"          # one call per fix
+   # BEFORE publishing, log the run as pending and save it: the edits are then in the memory, so a run that dies (timeout, crash) can still be undone from any machine
+   node $SKILL_DIR/scripts/seo-log.mjs add - <<'EOF'
+   {"site":"116838","name":"Hotel X","pending":true,"score":{"before":62,"after":88},"edits":[{"path":"src/pages/index.astro","find":"title=\"Hotel\"","replace":"title=\"Hotel X — Rooms & Rooftop\""}],"fixes":[{"page":"/","type":"title_short","before":"Hotel","after":"Hotel X — Rooms & Rooftop","analytics_before":{"views":40}}]}
+   EOF
+   node $SKILL_DIR/scripts/seo-log.mjs push $SITE
    $K publish $SITE --json                                                             # once
    node $SKILL_DIR/scripts/seo-audit.mjs $SITE --live                                  # each fixed finding gone, none new
+   node $SKILL_DIR/scripts/seo-log.mjs finish $SITE --published --live-verified        # closes the pending run (use --reverted after an undo)
    ```
+   If `brief` shows a `pending_run` (a previous run logged its edits and never closed): look at the LIVE page first, then `finish` it, or `undo --apply` and publish.
    Read `report`: a NEW `broken_links`, `dead_nav_links` or `incoherent_pages` caused by your change is a failure. A warning that was there before your change is reported, not chased
    (a "broken image" warning can be stale: `curl -sI <live-url>/uploads/x.jpg`; a `200` means leave it). A `gsc_low_ctr` finding stays in the audit until Google re-crawls: verify it by the served `<title>` and description (they equal what you wrote), not by the finding disappearing.
    Undo: `node $SKILL_DIR/scripts/seo-log.mjs undo $SITE --apply && $K publish $SITE` reverses the exact find/replace pairs of the last run (from any machine) and leaves any text the owner has rewritten since; `seo-backup.mjs restore` is the whole-file fallback on the machine that made the backup. The pair is then blocked for 30 days.
-4. **Log and save the memory**, every run, even when nothing was fixed. Per fix record `edits` (the exact `--find`/`--replace` you used: it is what makes undo work), `analytics_before` (the page's row from `$K analytics $SITE --period 30d --json`, every site has it) and `gsc_before` (the page's row from the audit's `gsc.top_pages`, only with Search Console). Those baselines are what makes learning possible. The memory format is `references/memory-format.md`:
+4. **Log and save the memory**, every run, even when nothing was fixed. Per fix record `edits` (the exact `--find`/`--replace` you used: it is what makes undo work), `analytics_before` (the page's row from `$K analytics $SITE --period 30d --json`, every site has it) and `gsc_before` (the page's row from the audit's `gsc.top_pages`, only with Search Console). Those baselines are what makes learning possible. The memory format is `references/memory-format.md`. Pass the JSON on **stdin** (`add - <<'EOF'`): an apostrophe in a title ("Luigi's Pizza") breaks a quoted argument.
    ```bash
-   node $SKILL_DIR/scripts/seo-log.mjs add '{"site":"116838","name":"Hotel X","score":{"before":62,"after":88},"edits":[{"path":"src/pages/index.astro","find":"title=\"Hotel\"","replace":"title=\"Hotel X — Rooms & Rooftop\""}],"fixes":[{"page":"/","type":"title_short","before":"Hotel","after":"Hotel X — Rooms & Rooftop","analytics_before":{"views":40}}],"published":true,"live_verified":true,"reverted":false,"notes":""}'
+   # (the run was already logged as pending in step 3 and closed there with `finish`; a run with no fix is logged here with a plain `add -`)
    node $SKILL_DIR/scripts/seo-log.mjs snapshot $SITE        # only after a successful publish: the state we shipped
    node $SKILL_DIR/scripts/seo-log.mjs push $SITE            # memory goes into the site (.kleap/seo-autopilot.json, not published)
    ```
@@ -146,7 +144,7 @@ Max 3 fixes per site per day, max 5 files touched, one publish per run (you keep
 
 The memory lives in the site (`.kleap/seo-autopilot.json`), so a scheduled run on a fresh machine, a container or a cloud routine starts with the full history (`pull`). `brief` gives you what the history taught:
 - `lessons.dropped`: do not use those fix types on this account without asking. `lessons.doubleDown`: prefer them. `owner_style`: when the owner replaced one of your titles or descriptions, their wording is the style guide for the next one. `reverted_last_30d` and `touched_last_14d`: leave them alone.
-- `due_for_measure` not empty: run the command in `hint` (audit JSON + Search Console + analytics -> `seo-log.mjs measure`). Per fix it records, from day 3, did the owner **keep** your wording; from day 28, did **Google** move on that page (a 28-day window that starts after the fix vs the 28 days before it, per-day rates, only judged with >= 100 impressions; a 7-day window from day 14 is an "early read"); else, from day 30, did page **traffic** move (all sources, weaker evidence). The result feeds `lessons`.
+- `due_for_measure` not empty: run `node $SKILL_DIR/scripts/seo-log.mjs measure-due $SITE` (it fetches the audit, Search Console and analytics itself). Per fix it records, from day 3, did the owner **keep** your wording; from day 28, did **Google** move on that page (a 28-day window that starts after the fix vs the 28 days before it, per-day rates, only judged with >= 100 impressions; a 7-day window from day 14 is an "early read"); else, from day 30, did page **traffic** move (all sources, weaker evidence). The result feeds `lessons`.
 - Read the numbers like this (`references/diagnosis.md`): many impressions + low CTR = rewrite title and description; good CTR + few impressions = the page needs content and links (a Level 2 proposal); position > 20 = content, not metadata.
 - Under 100 clicks in 28 days: say "too little data to conclude". Never invent a trend. Search Console needs a custom domain and one click by the owner (`$K search-console connect $SITE` prints the consent link); say this on day one, not in week two.
 
