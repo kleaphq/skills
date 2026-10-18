@@ -1,6 +1,6 @@
 {
   "name": "kleap",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Build, edit and publish real, hosted websites with Kleap from any agent — then run them: read form leads, traffic and the site's own database, buy (user-paid checkout) or connect a domain. Verified-live publishing; hosting, database, auth, SSL and domains included.",
   "author": {
     "name": "Kleap",

@@ -31,7 +31,7 @@ The free audit on **150 random sites published on Kleap in the last 120 days** (
 
 ## 3. The mechanics, tested separately
 
-- `node scripts/selftest.mjs`: **54 offline checks, no network, no account** (`evidence/selftest-output.txt`): budget, cool-downs, measurement windows, keep/override detection, lessons, pause; one history per site whatever
+- `node scripts/selftest.mjs`: **59 offline checks, no network, no account** (`evidence/selftest-output.txt`): budget, cool-downs, measurement windows, keep/override detection, lessons, pause; one history per site whatever
   name the agent uses; memory sync between two machines and across the two routes (shell and connector); drift and its two ways out (`published_at` from the API when it exists, `rebaseline`); undo by logged edits that leaves the
   owner's later text; the URL audit against a local fixture site (utility pages ignored, `noindex` pages as notes, `/index.html` = `/`, repeated images counted once, Japanese titles measured by width). **The Search Console numbers in it are
   synthetic**: it tests the logic, not SEO results.
@@ -60,7 +60,7 @@ the crontab (now `seo-schedule.mjs`).
 ## 5. Reproduce
 
 ```bash
-node scripts/selftest.mjs                                   # 54 offline checks, ~10 s
+node scripts/selftest.mjs                                   # 59 offline checks, ~10 s
 node scripts/seo-audit.mjs --url https://your-site.com      # free audit, no account
 node scripts/seo-doctor.mjs my-site.kleap.io                # is everything ready?
 # then in your agent: "Use the kleap-seo-autopilot skill on my-site.kleap.io."

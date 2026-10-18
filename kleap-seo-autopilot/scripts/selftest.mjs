@@ -224,6 +224,52 @@ check("URL audit: minified HTML with unquoted attributes is read correctly (no f
 check("URL audit: legal pages are ignored like login pages", !A.findings.some((f) => f.page === "/privacy-policy"));
 check("URL audit: a title 1 character under the limit is a note, not a priority", A.findings.some((f) => f.page === "/menu" && f.type === "title_short" && f.impact <= 2) && A.top3.every((f) => f.page !== "/menu"), JSON.stringify(A.findings.filter((f) => f.page === "/menu")));
 check("URL audit: fast", Date.now() - t0 < 20000);
+
+// ── part 4: Kleap-mode audit, source vs LIVE page (wrapper layouts, redirect/404 stubs, links made by components) ───────────────────────────────────────
+{
+  const pageHtml = (title, desc, h1, links = "") => `<!doctype html><html lang="fr"><head>${title ? `<title>${title}</title>` : ""}${desc ? `<meta name="description" content="${desc}">` : ""}<script type="application/ld+json">{"@graph":[{"@type":"WebSite"},{"@type":"Person"}]}</script></head><body><main>${h1 ? `<h1>${h1}</h1>` : ""}${"word ".repeat(200)}${links}</main></body></html>`;
+  const LIVE = {
+    "/": pageHtml("Portfolio de Marie Dupont, developpeuse web a Lyon", "Marie Dupont cree des sites rapides pour les artisans de Lyon : cadrage, design, developpement et mise en ligne clef en main.", "Marie Dupont", '<a href="/linked-by-component/">x</a>'),
+    "/linked-by-component": pageHtml("Page liee par un composant React pour les tests du pilote", "Cette page est liee uniquement depuis un composant, jamais depuis un fichier astro de la source, et reste donc visible.", "Linked"),
+    "/about": pageHtml("", "", ""),
+    "/target": pageHtml("Cible d une redirection volontaire pour les tests", "Une page cible dont le titre ne doit jamais etre juge comme celui de la page qui redirige vers elle, par construction.", "Cible"),
+  };
+  const srv = http.createServer((req, res) => {
+    const u = req.url.split("?")[0].replace(/(.)\/$/, "$1");
+    if (u === "/old") { res.statusCode = 301; res.setHeader("location", "/target"); return res.end(); }
+    const r = LIVE[u]; if (!r) { res.statusCode = 404; return res.end("nope"); }
+    res.setHeader("content-type", "text/html"); res.end(r);
+  });
+  await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const FILES = {
+    "src/layouts/Wrap.astro": "---\nimport Base from './Base.astro';\nconst {lang='fr'}=Astro.props;\n---\n<Base title='Portfolio de Marie Dupont, developpeuse web a Lyon' description='x' lang={lang}><slot/></Base>",
+    "src/layouts/Base.astro": "---\nconst {title,description}=Astro.props;\n---\n<html><head><title>{title}</title></head><body><slot/></body></html>",
+    "src/pages/index.astro": "---\nimport Wrap from '@/layouts/Wrap.astro';\n---\n<Wrap lang=\"fr\"><main>Portfolio</main></Wrap>",
+    "src/pages/linked-by-component.astro": "---\nimport Wrap from '@/layouts/Wrap.astro';\n---\n<Wrap><main>Linked</main></Wrap>",
+    "src/pages/about.astro": "---\nimport Base from '@/layouts/Base.astro';\n---\n<Base lang=\"fr\"><main>About us</main></Base>",
+    "src/pages/old.astro": "---\nexport const prerender = false;\nreturn Astro.redirect('/target', 301);\n---",
+    "src/pages/gone.astro": "---\nexport const prerender = false;\nreturn new Response(null, { status: 404 });\n---",
+    "src/pages/target.astro": "---\nimport Wrap from '@/layouts/Wrap.astro';\n---\n<Wrap><main>Target</main></Wrap>",
+  };
+  const LIVE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "seo-live-"));
+  const cli = path.join(LIVE_DIR, "kleap-live.mjs");
+  fs.writeFileSync(cli, `const a = process.argv.slice(2).filter((x) => x !== "--json"); const FILES = ${JSON.stringify(FILES)};
+if (a[0] === "status") console.log(JSON.stringify({ app_id: 9, name: "Marie", production_url: ${JSON.stringify(base)} }));
+else if (a[0] === "files" && a[1] === "ls") console.log(JSON.stringify({ files: Object.keys(FILES).map((path) => ({ path })) }));
+else if (a[0] === "files" && a[1] === "cat") console.log(JSON.stringify({ files: a.slice(3).map((path) => ({ path, content: FILES[path] ?? "" })) }));
+else { console.error("unsupported: " + a.join(" ")); process.exit(1); }`);
+  const { stdout: kout } = await promisify(execFile)("node", [path.join(HERE, "seo-audit.mjs"), "9", "--live", "--no-gsc", "--json"], { encoding: "utf8", timeout: 60000, env: { ...process.env, KLEAP_BIN: `node ${cli}`, KLEAP_SEO_HOME: HOME } });
+  const K = JSON.parse(kout);
+  const kh = (page, type) => K.findings.some((f) => f.page === page && f.type === type);
+  check("live audit: a title/description set by a wrapper layout is not reported missing", !kh("/", "missing_title") && !kh("/", "missing_description") && !kh("/", "no_h1"), JSON.stringify(K.findings.filter((f) => f.page === "/")));
+  check("live audit: a page the LIVE site links to is not an orphan", !kh("/linked-by-component", "orphan_page"));
+  check("live audit: a deliberate redirect and a 404 stub are left alone and told to the owner", !K.findings.some((f) => f.page === "/old" || f.page === "/gone") && K.owner_notes.some((n) => /\/old/.test(n)) && K.owner_notes.some((n) => /\/gone/.test(n)), JSON.stringify([K.owner_notes, K.findings.filter((f) => /old|gone/.test(f.page))]));
+  check("live audit: a page that really has no title is still reported", kh("/about", "missing_title"), JSON.stringify(K.findings.filter((f) => f.page === "/about")));
+  check("live audit: schema added by a wrapper (Person) is not reported missing", !kh("/", "no_page_schema"));
+  srv.close();
+  fs.rmSync(LIVE_DIR, { recursive: true, force: true });
+}
  for (const d of [H1, H2]) fs.rmSync(d, { recursive: true, force: true });
 
 console.log(failed ? `\n${failed} check(s) FAILED` : "\nall checks passed (synthetic data: this tests the mechanics, not SEO results)");
