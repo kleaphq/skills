@@ -6,9 +6,9 @@ the `<title>`, meta description, canonical, `robots`, Open Graph and a JSON-LD g
 You change SEO by changing the props a page passes to `<Base>` and the content inside it.
 Do not edit `Base.astro`, `astro.config.mjs`, `package.json`, `public/robots.txt` (Kleap owns them).
 
-How to edit (deterministic file edits, no Kleap AI involved): `kleap files cat <site> <path>` first, copy the exact old text,
-then `kleap files edit <site> <path> --find "<old>" --replace "<new>"` (`--find` must match once; add surrounding
-text to make it unique, or `--all` when you really mean every occurrence). `kleap publish <site>` makes it live.
+How to edit (deterministic file edits, no Kleap AI involved): `npx -y kleap-cli@2.1.0 files cat <site> <path>` first, copy the exact old text,
+then `npx -y kleap-cli@2.1.0 files edit <site> <path> --find "<old>" --replace "<new>"` (`--find` must match once; add surrounding
+text to make it unique, or `--all` when you really mean every occurrence). `npx -y kleap-cli@2.1.0 publish <site>` makes it live.
 MCP equivalent: `read_files` -> `edit_files` (several edits in one validated call) -> `publish_app`.
 
 ## title_short / title_long / missing_title
@@ -37,7 +37,7 @@ surrounding heading to describe what the image shows). Purely decorative images 
 ## dead_internal_link
 The link points to a route that has no page. In this order: (1) repoint it to the page that really covers the
 topic (or an on-page anchor like `#contact`), (2) remove only the `<a>`, keeping the visible text, (3) if the
-site clearly needs that page (a "Contact" link with no contact page), create it with `kleap files write <site>
+site clearly needs that page (a "Contact" link with no contact page), create it with `npx -y kleap-cli@2.1.0 files write <site>
 src/pages/<name>.astro --file <local>` using the same `<Base title description>` structure as the homepage.
 Never delete a page to "fix" a link. (tested: removing the `<a href="/rooms">` link made the finding disappear)
 
@@ -80,7 +80,7 @@ If the site has fewer than 100 clicks in 28 days, say so: it is too little data 
 `live_title_differs` right after your own edit means you have not published yet (or the deploy is still going):
 publish, wait ~30 s, run the audit with `--live` again. If you did NOT edit that page and the live page differs from the source, the owner has
 unpublished edits: do not publish, tell the owner (see `seo-log.mjs drift`). `live_not_200` on a page: publish again, then
-`kleap status <site>`; if it persists, revert your last change and report it.
+`npx -y kleap-cli@2.1.0 status <site>`; if it persists, revert your last change and report it.
 
 ## Manual audit (agents without a shell: ChatGPT, Claude.ai, Grok API)
 No script available? Do the same checks by hand with the MCP tools: `list_app_files` -> `read_files` on every

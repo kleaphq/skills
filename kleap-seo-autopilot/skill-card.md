@@ -1,6 +1,6 @@
 # Skill card: Kleap SEO autopilot (risk disclosure)
 
-**Version 0.2.0 - MIT - written by Kleap.** Read this before you schedule it.
+**Version 0.2.1 - MIT - written by Kleap.** Read this before you schedule it.
 
 ## What it is allowed to do
 - Read your site's files and its public pages (plain GET requests), read your Search Console and analytics numbers through the Kleap CLI or MCP connector.
@@ -20,7 +20,7 @@ and the skill never asks you to paste one into a chat. The memory file holds onl
 | Risk | Mitigation |
 |---|---|
 | An unattended agent edits a live site | The **first run proposes and asks**; after that, 3 fixes and one publish per run, a backup before every edit, a live check after every publish, automatic undo, a pause switch that works from any machine |
-| It publishes your unfinished work (publishing ships every unpublished edit in the site) | `seo-log.mjs drift` compares the site with what it last published; on any difference it audits and proposes but does not publish |
+| It publishes your unfinished work (publishing ships every unpublished edit in the site) | `seo-log.mjs drift` compares the site with what it last published; on any difference it audits and proposes but does not publish, names the files, and waits for you to say you published them yourself (`rebaseline`) or to publish everything |
 | A wrong or tone-deaf title | It reuses only facts the site shows, keeps the site's language, and shows every before -> after; "revert" restores the backup. If you replace its wording, that wording becomes the style guide |
 | It overwrites a change you made on purpose | A fix it made is not re-applied for 14 days when the problem comes back; it tells you instead. A reverted fix is blocked for 30 days |
 | Hallucinated SEO gains | No traffic claim is made without Search Console data; under 100 clicks in 28 days it says "too little data" |
@@ -28,7 +28,7 @@ and the skill never asks you to paste one into a chat. The memory file holds onl
 | The CLI package is swapped under you | The CLI is pinned to an exact version in every command |
 
 ## How to undo
-`node scripts/seo-backup.mjs restore <site> <path>` then publish, or tell your agent "revert the SEO changes"; or delete `.kleap/seo-autopilot.json` to make it forget (it then starts from zero and asks again).
+Tell your agent "revert the last SEO change". It runs `node scripts/seo-log.mjs undo <site> --apply`, which reverses the exact find/replace pairs of the last run from ANY machine (the pairs are in the memory kept in your site) and leaves any text you have rewritten since; then it publishes once and checks. Whole-file backups (`seo-backup.mjs`) are a local fallback. Delete `.kleap/seo-autopilot.json` to make it forget (it then starts from zero and asks again).
 
 ## What it cannot do
 It does not fix sites hosted elsewhere (the free URL audit still works and lists the fixes for you), legacy Next.js Kleap sites (no `.astro` pages), or anything that needs content only you know.

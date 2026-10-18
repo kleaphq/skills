@@ -10,7 +10,9 @@
 //   node seo-log.mjs snapshot <site>                AFTER a successful publish: remember the file state we shipped (for the next drift check)
 //   node seo-log.mjs push <site>                    LAST: save the memory back into the site (not published, 404 to visitors)
 // Occasionally:
-//   node seo-log.mjs mode <site> [propose|auto|pause]   read / set autonomy (default propose = ask first; pause = do nothing)
+//   node seo-log.mjs mode <site> [propose|auto|pause]   read / set autonomy (default propose = ask first; pause = do nothing); saved in the site, every machine obeys it
+//   node seo-log.mjs rebaseline <site>              the owner says "I published my own edits": count the site as it is now as the published state (clears a drift)
+//   node seo-log.mjs undo <site> [--run <ts>] [--apply]   reverse the exact find/replace pairs of a run (`edits`), from any machine; the owner's later changes stay
 //   node seo-log.mjs measure <site> --audit audit.json [--gsc gsc.json] [--analytics an.json] [--min-days 14]
 //   node seo-log.mjs lessons                        what the autopilot has learned (also written to lessons.json)
 //   node seo-log.mjs weekly [--days 7]              owner-facing summary: shipped, kept, measured, learned
@@ -18,11 +20,12 @@
 //
 // Run entry (one per site per run):
 //   {"site":"116838","name":"Hotel X","score":{"before":71,"after":94},
+//    "edits":[{"path":"src/pages/index.astro","find":"<exact old text>","replace":"<exact new text>"}],   <- one per `files edit` you ran: this is what makes undo work from any machine
 //    "fixes":[{"page":"/","type":"title_short","field":"title","before":"Hotel","after":"Hotel X — Rooms & Rooftop",
 //              "gsc_before":{"clicks":3,"impressions":210,"ctr":1.4,"position":14.2},"analytics_before":{"views":40}}],
 //    "published":true,"live_verified":true,"reverted":false,"gsc":{"clicks":12,"impressions":900},"notes":""}
-//   `gsc_before` = the page's own row from `kleap search-console <site> --json` (top_pages) at fix time; `analytics_before` = the page's row
-//   from `kleap analytics <site> --period 30d --json` (top_pages: {path, views}). Both optional; they are what makes learning possible.
+//   `gsc_before` = the page's own row from `search-console <site> --period 28d --json` (top_pages) at fix time; `analytics_before` = the page's row
+//   from `analytics <site> --period 30d --json` (top_pages: {path, views}). Record `analytics_before` on EVERY fix (every site has analytics, few have Search Console).
 //
 // Files in $KLEAP_SEO_HOME (default ~/.kleap-seo): log.jsonl, measures.jsonl, lessons.json, config.json, published-state/<site>.json.
 // The site's own copy of the memory is .kleap/seo-autopilot.json. Tests can pretend it is another day with KLEAP_SEO_TODAY=YYYY-MM-DD.
@@ -82,14 +85,18 @@ function canon(site) {
   if (/^\d+$/.test(s)) return s;
   const cfg = configOf();
   if (cfg.aliases?.[s]) return cfg.aliases[s];
+  if (process.env.KLEAP_SEO_OFFLINE) return s; // selftest / dry runs: keys are used as given
   const out = kleap(["status", s, "--json"], { allowFail: true });
   try { const id = JSON.parse(out).id; if (id) { cfg.aliases = { ...(cfg.aliases || {}), [s]: String(id) }; writeJson(F("config.json"), cfg); return String(id); } } catch {}
-  return s;
+  // Never fall back to the name as typed: that would start a second, empty history for a site that already has one.
+  die(`cannot resolve "${s}" to a Kleap site: not signed in, a typo, or offline. Run \`${BIN.join(" ")} auth status\`, or use the numeric id from \`${BIN.join(" ")} list\`.`, 3);
 }
 
 // ── lessons ────────────────────────────────────────────────────────────────────────────────────
 function rebuildLessons() {
-  const ms = jl(F("measures.jsonl"));
+  const all = jl(F("measures.jsonl"));
+  const fullIds = new Set(all.filter((m) => !m.early).map((m) => m.id));
+  const ms = all.filter((m) => !m.early || !fullIds.has(String(m.id).replace(/\|early$/, ""))); // the early look is superseded by the full measure
   const byType = {};
   for (const m of ms) {
     const t = (byType[m.type] ||= { measured: 0, kept: 0, overridden: 0, improved: 0, flat: 0, worse: 0, too_little_data: 0 });
@@ -136,11 +143,13 @@ function pullMemory(site) {
   const nr = mergeInto(F("log.jsonl"), mem.runs.map((e) => ({ ...e, site })), (e) => `${e.ts}|${e.site}`);
   const nm = mergeInto(F("measures.jsonl"), (mem.measures || []).map((m) => ({ ...m, site })), (m) => m.id);
   const cfg = configOf();
-  // the autonomy switch travels with the site: a pause set on another machine must stop THIS machine too. Adopt the remote mode when we have none,
-  // when it says pause (the safe direction always wins), or when it was set more recently than ours.
+  // the autonomy switch travels with the site: a pause set on another machine must stop THIS machine too. The most recent setting wins; when the times
+  // cannot be compared (or tie), pause wins (the safe direction).
   const loc = cfg.sites[site];
-  if (mem.mode && (!loc || mem.mode === "pause" || (mem.since && loc.since && String(mem.since) > String(loc.since)))) { cfg.sites[site] = { mode: mem.mode, since: mem.since || null }; writeJson(F("config.json"), cfg); }
-  if (mem.snapshot && !fs.existsSync(F(`published-state/${site}.json`))) writeJson(F(`published-state/${site}.json`), mem.snapshot);
+  const comparable = mem.since && loc?.since;
+  if (mem.mode && (!loc || (comparable ? String(mem.since) > String(loc.since) || (String(mem.since) === String(loc.since) && mem.mode === "pause") : mem.mode === "pause"))) { cfg.sites[site] = { mode: mem.mode, since: mem.since || null }; writeJson(F("config.json"), cfg); }
+  const localSnap = readJson(F(`published-state/${site}.json`), null);
+  if (mem.snapshot && (!localSnap || String(mem.snapshot.taken_at) > String(localSnap.taken_at))) writeJson(F(`published-state/${site}.json`), mem.snapshot); // the newest publish wins, whichever machine made it
   rebuildLessons();
   return { nr, nm, mode: cfg.sites[site]?.mode || "propose" };
 }
@@ -192,7 +201,7 @@ if (cmd === "add") {
   const touched = [...new Set(kept.filter((e) => Date.parse(e.ts) >= t14).flatMap((e) => (e.fixes || []).map((f) => `${f.page}|${f.type}`)))];
   const reverted = [...new Set(all.filter((e) => e.reverted && Date.parse(e.ts) >= t30).flatMap((e) => (e.fixes || []).map((f) => `${f.page}|${f.type}`)))];
   const measured = new Set(jl(F("measures.jsonl")).map((m) => m.id));
-  const due = kept.flatMap((e) => (e.fixes || []).filter((f) => !measured.has(fixId(e, f)) && daysBetween(e.ts, now()) >= 14).map((f) => ({ page: f.page, type: f.type, fixed_on: dayOf(e.ts) })));
+  const due = kept.flatMap((e) => (e.fixes || []).filter((f) => { const a = daysBetween(e.ts, now()); return a >= 14 ? !measured.has(fixId(e, f)) : a >= 3 && !measured.has(fixId(e, f) + "|early"); }).map((f) => ({ page: f.page, type: f.type, fixed_on: dayOf(e.ts), stage: daysBetween(e.ts, now()) >= 14 ? "full" : "early" })));
   const L = lessonsNow();
   const cfg = configOf();
   const lastScore = [...kept].reverse().find((e) => e.score?.after != null)?.score.after ?? null;
@@ -202,15 +211,17 @@ if (cmd === "add") {
     fixes_today: doneToday, remaining_today: mode === "pause" ? 0 : Math.max(0, 3 - doneToday),
     touched_last_14d: touched, reverted_last_30d: reverted, last_score: lastScore,
     lessons: L.rules, owner_style: L.owner_style, due_for_measure: due,
-    hint: due.length ? "run: seo-audit.mjs <site> --json > audit.json; kleap search-console <site> --period 28d --json > gsc.json; kleap analytics <site> --period 30d --json > an.json; seo-log.mjs measure <site> --audit audit.json --gsc gsc.json --analytics an.json" : undefined,
+    hint: due.length ? "run: node seo-audit.mjs <site> --json > audit.json; npx -y kleap-cli@2.1.0 search-console <site> --period 28d --json > gsc.json; npx -y kleap-cli@2.1.0 analytics <site> --period 30d --json > an.json; node seo-log.mjs measure <site> --audit audit.json --gsc gsc.json --analytics an.json   (a fix younger than 28 days: use --period 7d and add --gsc-days 7 for an early read)" : undefined,
   }));
-} else if (cmd === "snapshot") {
+} else if (cmd === "snapshot" || cmd === "rebaseline") {
+  // snapshot: right after OUR successful publish. rebaseline: the owner says "I published my own edits" (or you checked that the live page shows them):
+  // from now on the site as it is counts as published, so drift starts from zero.
   const site = canon(rest[0]);
-  if (!site) die("usage: seo-log.mjs snapshot <site>", 2);
+  if (!site) die(`usage: seo-log.mjs ${cmd} <site>`, 2);
   const ls = JSON.parse(kleap(["files", "ls", site, "--json"]));
   const files = Object.fromEntries((ls.files || []).filter((f) => !f.path.startsWith(".kleap/")).map((f) => [f.path, f.updated_at]));
-  writeJson(F(`published-state/${site}.json`), { taken_at: now().toISOString(), files });
-  console.log(`snapshot of ${Object.keys(files).length} files saved (state after our publish)`);
+  writeJson(F(`published-state/${site}.json`), { taken_at: now().toISOString(), files, by: cmd });
+  console.log(`${cmd === "rebaseline" ? "rebaselined" : "snapshot"}: ${Object.keys(files).length} files recorded as the published state`);
 } else if (cmd === "drift") {
   const site = canon(rest[0]);
   if (!site) die("usage: seo-log.mjs drift <site>", 2);
@@ -218,10 +229,16 @@ if (cmd === "add") {
   if (!snap) { console.log(JSON.stringify({ site, state: "none", note: "no snapshot yet: this is the first run, or the memory was not pulled. Ask the owner before the first publish: it ships ALL unpublished edits in the site." })); process.exit(0); }
   const ls = JSON.parse(kleap(["files", "ls", site, "--json"]));
   const cur = Object.fromEntries((ls.files || []).filter((f) => !f.path.startsWith(".kleap/")).map((f) => [f.path, f.updated_at]));
-  const changed = Object.keys(cur).filter((p) => !(p in snap.files) || new Date(cur[p]) - new Date(snap.files[p]) > 1000);
+  let changed = Object.keys(cur).filter((p) => !(p in snap.files) || new Date(cur[p]) - new Date(snap.files[p]) > 1000);
   const removed = Object.keys(snap.files).filter((p) => !(p in cur));
-  console.log(JSON.stringify({ site, state: changed.length || removed.length ? "drift" : "clean", changed: changed.slice(0, 20), removed: removed.slice(0, 20), since: snap.taken_at,
-    note: changed.length || removed.length ? "someone (the owner or Kleap's AI) changed the site after our last publish: do NOT publish; tell the owner, propose only" : "site is exactly as we left it" }));
+  let publishedAt = null;
+  if (changed.length) { // when Kleap tells us when the site was last published, an edit older than that is already live (the owner published it themselves)
+    try { publishedAt = JSON.parse(kleap(["status", site, "--json"])).published_at || null; } catch {}
+    if (publishedAt) changed = changed.filter((p) => new Date(cur[p]) > new Date(publishedAt));
+  }
+  const drift = changed.length || removed.length;
+  console.log(JSON.stringify({ site, state: drift ? "drift" : "clean", changed: changed.slice(0, 20), removed: removed.slice(0, 20), since: snap.taken_at, last_published_at: publishedAt,
+    note: drift ? "someone (the owner or Kleap's AI) changed the site after our last publish: do NOT publish; audit and propose only. Tell the owner which files. If the owner says they already published those edits themselves, run `seo-log.mjs rebaseline <site>` and continue." : "site is exactly as we left it" }));
 } else if (cmd === "pull") {
   const site = canon(rest[0]);
   if (!site) die("usage: seo-log.mjs pull <site>", 2);
@@ -232,11 +249,33 @@ if (cmd === "add") {
   if (!site) die("usage: seo-log.mjs push <site>", 2);
   const mem = pushMemory(site);
   console.log(`memory saved to ${MEM_PATH} (${mem.runs.length} run(s), ${mem.measures.length} measurement(s))`);
+} else if (cmd === "undo") {
+  // Reverse the exact find/replace pairs a run logged (`edits`), newest first. Works from any machine (the memory travels in the site) and touches ONLY the
+  // text we changed: if the owner has rewritten that text since, the edit fails and their version stays. Dry run by default; --apply executes (then YOU publish once).
+  const site = canon(rest[0]);
+  const want = opt("--run"), apply = rest.includes("--apply");
+  if (!site) die("usage: seo-log.mjs undo <site> [--run <ts>] [--apply]", 2);
+  const list = runs().filter((e) => String(e.site) === String(site) && !e.reverted && !e.undo_of && ((e.edits || []).length || (e.fixes || []).some((f) => (f.edits || []).length)));
+  const run = want ? list.find((e) => e.ts === want) : list.at(-1);
+  if (!run) die("nothing to undo: no logged run with `edits` (older log format: use seo-backup.mjs restore on the machine that made the backup)", 1);
+  const edits = [...(run.edits || []), ...(run.fixes || []).flatMap((f) => f.edits || [])].reverse();
+  let ok = 0, left = 0;
+  for (const ed of edits) {
+    const cmdLine = `files edit ${site} ${ed.path} --find <the text we wrote> --replace <the text that was there before>`;
+    if (!apply) { console.log(`would run: ${cmdLine}`); continue; }
+    const out = kleap(["files", "edit", site, ed.path, "--find", ed.replace, "--replace", ed.find], { allowFail: true });
+    if (out === null) { left++; console.log(`kept as is (the text we wrote is no longer there, the owner changed it): ${ed.path}`); } else { ok++; console.log(`undone: ${ed.path}`); }
+  }
+  if (apply) {
+    fs.appendFileSync(F("log.jsonl"), JSON.stringify({ ts: now().toISOString(), site, name: run.name, fixes: (run.fixes || []).map(({ edits: _e, ...f }) => f), published: false, live_verified: false, reverted: true, undo_of: run.ts, notes: `undo: ${ok} edit(s) reversed, ${left} left because the owner changed that text` }) + "\n");
+    console.log(`${ok} edit(s) reversed, ${left} left alone. Now publish once and verify; the pair is blocked for 30 days.`);
+  } else console.log(`(dry run: ${edits.length} edit(s) from the run of ${run.ts}; add --apply to reverse them)`);
 } else if (cmd === "measure") {
   const site = canon(rest[0]);
   const auditFile = opt("--audit"), gscFile = opt("--gsc"), anFile = opt("--analytics");
   const minDays = Number(opt("--min-days", 14));
-  if (!site || !auditFile) die("usage: seo-log.mjs measure <site> --audit audit.json [--gsc gsc.json] [--analytics an.json] [--min-days 14]", 2);
+  const gDays = Number(opt("--gsc-days", 28)); // length of the window the --gsc file covers: 28 (npx -y kleap-cli@2.1.0 search-console --period 28d) or 7 for an early read
+  if (!site || !auditFile) die("usage: seo-log.mjs measure <site> --audit audit.json [--gsc gsc.json --gsc-days 28|7] [--analytics an.json] [--min-days 14]", 2);
   const audit = readJson(auditFile, null);
   const gsc = gscFile ? readJson(gscFile, null) : null;
   const an = anFile ? readJson(anFile, null) : null;
@@ -248,42 +287,47 @@ if (cmd === "add") {
   const done = new Set(jl(F("measures.jsonl")).map((m) => m.id));
   let n = 0;
   for (const e of runs().filter((x) => String(x.site) === String(site) && !x.reverted)) {
-    if (daysBetween(e.ts, now()) < minDays) continue;
+    const age = daysBetween(e.ts, now());
+    if (age < 3) continue;
     for (const f of e.fixes || []) {
-      const id = fixId(e, f);
+      const baseId = fixId(e, f);
+      const full = age >= minDays;
+      const id = full ? baseId : baseId + "|early"; // day 3-13: only "did the owner keep it?"; the Google verdict waits so it never blocks the later full measure
       if (done.has(id)) continue;
-      const m = { id, ts: now().toISOString(), site, page: f.page, type: f.type, field: f.field || FIELD_OF(f.type), fixed_on: dayOf(e.ts), after: f.after };
+      const m = { id, ts: now().toISOString(), site, page: f.page, type: f.type, field: f.field || FIELD_OF(f.type), fixed_on: dayOf(e.ts), after: f.after, ...(full ? {} : { early: true }) };
       const cur = pageBy[f.page]?.[m.field];
       if (m.field && cur != null) {
         if (norm(cur) === norm(f.after)) m.override = "kept";
         else { m.override = "overridden"; m.owner_text = cur; }
       }
+      // Google: the window we read must start AFTER the fix, or it still contains the days we are comparing against. Per-day rates make a 7- and a 28-day window comparable.
       const g = gscBy[f.page];
-      if (f.gsc_before && g) {
-        const b = f.gsc_before;
-        if ((b.impressions ?? 0) < 100) m.gsc = { verdict: "too_little_data", before: b, now: g };
+      if (full && f.gsc_before && g && age >= gDays) {
+        const b = f.gsc_before, bDays = b.days || 28;
+        if ((b.impressions ?? 0) < 100) m.gsc = { verdict: "too_little_data", before: b, now: g, window_days: gDays };
         else {
           const ctrRel = b.ctr ? (g.ctr - b.ctr) / b.ctr : 0;
           const posGain = (b.position ?? 0) - (g.position ?? 0); // positive = moved up
-          const clicksRel = b.clicks ? (g.clicks - b.clicks) / b.clicks : 0;
+          const bc = (b.clicks ?? 0) / bDays, gc = (g.clicks ?? 0) / gDays;
+          const clicksRel = bc ? (gc - bc) / bc : 0;
           const verdict = (ctrRel >= 0.2 || posGain >= 1) && clicksRel > -0.2 ? "improved" : (ctrRel <= -0.2 && clicksRel < 0) || posGain <= -2 ? "worse" : "flat";
-          m.gsc = { verdict, before: b, now: { clicks: g.clicks, impressions: g.impressions, ctr: g.ctr, position: g.position } };
+          m.gsc = { verdict, before: b, now: { clicks: g.clicks, impressions: g.impressions, ctr: g.ctr, position: g.position }, window_days: gDays, early_read: gDays < 28 };
         }
       }
       const a = anBy[f.page];
-      if (!m.gsc && f.analytics_before && a) { // weaker evidence: all-source pageviews, 30-day windows
+      if (full && !m.gsc && f.analytics_before && a && age >= 30) { // weaker evidence: all-source pageviews; both windows are 30 days, so the fix must be 30 days old
         const b = f.analytics_before.views ?? 0;
         const rel = b ? (a.views - b) / b : 0;
         m.traffic = { verdict: b < 20 ? "too_little_data" : rel >= 0.25 ? "improved" : rel <= -0.25 ? "worse" : "flat", before_views: b, now_views: a.views, note: "all sources, not only Google" };
       }
       fs.appendFileSync(F("measures.jsonl"), JSON.stringify(m) + "\n");
       n++;
-      const sig = (m.gsc ? `Google ${m.gsc.verdict}` : m.traffic ? `traffic ${m.traffic.verdict}` : gscFile || anFile ? "no page data" : "") + (m.override === "overridden" && (m.gsc || m.traffic) ? " (the page runs the owner's wording: not counted for or against this fix type)" : "");
-      console.log(`${f.page} ${f.type} (fixed ${m.fixed_on}): ${m.override ? "owner " + m.override : "not checkable"}${sig ? ", " + sig : ""}`);
+      const sig = (m.gsc ? `Google ${m.gsc.verdict}${m.gsc.early_read ? " (early, 7-day window)" : ""}` : m.traffic ? `traffic ${m.traffic.verdict}` : full && (gscFile || anFile) ? "no usable page data yet" : "") + (m.override === "overridden" && (m.gsc || m.traffic) ? " (the page runs the owner's wording: not counted for or against this fix type)" : "");
+      console.log(`${f.page} ${f.type} (fixed ${m.fixed_on}${full ? "" : ", early look"}): ${m.override ? "owner " + m.override : "not checkable"}${sig ? ", " + sig : ""}`);
     }
   }
   const L = rebuildLessons();
-  console.log(n ? `${n} fix(es) measured. rules: ${JSON.stringify(L.rules)}` : `Nothing due (needs fixes older than ${minDays} days that were not measured yet).`);
+  console.log(n ? `${n} fix(es) measured. rules: ${JSON.stringify(L.rules)}` : `Nothing due (fixes need 3+ days for the early look, ${minDays}+ for the full measure).`);
 } else if (cmd === "lessons") {
   const L = rebuildLessons();
   if (!Object.keys(L.byType).length) { console.log("No lessons yet: fixes need 14+ days before they can be measured. Run `measure` after that."); process.exit(0); }
@@ -294,6 +338,13 @@ if (cmd === "add") {
   const days = Number(opt("--days", 7));
   const since = now().getTime() - days * 864e5;
   const es = runs().filter((e) => Date.parse(e.ts) >= since);
+  // heartbeat: an autopilot that silently stopped is the worst failure, so name every site in auto mode that has not run for 2+ days
+  for (const [id, c] of Object.entries(configOf().sites || {})) {
+    if (c.mode !== "auto") continue;
+    const last = runs().filter((e) => String(e.site) === String(id)).map((e) => e.ts).sort().at(-1);
+    const gap = last ? daysBetween(last, now()) : null;
+    if (gap == null || gap >= 2) console.log(`! ${id}: autopilot is ON but ${last ? `has not run since ${dayOf(last)} (${gap} days)` : "has never run on this machine"}: check the schedule (cron.log, the agent's task list)`);
+  }
   if (!es.length) { console.log(`No autopilot runs in the last ${days} days.`); process.exit(0); }
   const bySite = {};
   for (const e of es) (bySite[e.site] ||= []).push(e);

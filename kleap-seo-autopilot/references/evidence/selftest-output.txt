@@ -11,5 +11,29 @@ ok   the owner's wording becomes the style guide
 ok   under 100 impressions = too little data
 ok   pause means zero fixes left today
 ok   weekly report runs
+ok   a site named by its address shares the history of its id
+ok   an unresolvable site name stops loudly (no ghost history)
+ok   push saves the memory into the site
+ok   a second machine (named by address) pulls the same history
+ok   pause set on machine 1 stops machine 2
+ok   a newer mode set on machine 2 is adopted by machine 1
+ok   an unpublished owner edit is drift
+ok   once Kleap says the site was published after that edit, it is clean (no deadlock for active owners)
+ok   drift is back when the API says nothing
+ok   rebaseline (the owner says they published) clears the drift
+ok   undo is a dry run by default
+ok   undo --apply restores the old text and keeps the draft sentence
+ok   an undone pair is blocked for 30 days
+ok   undo leaves text the owner rewrote alone
+ok   a connector-written memory is understood by the scripts (cool-down, mode, score)
+ok   the weekly report reads it too
+ok   URL audit: a dead link is reported once, on the page that has it
+ok   URL audit: login/utility pages are never findings
+ok   URL audit: /index.html is the homepage, not a duplicate of it
+ok   URL audit: a noindex page is a note for the owner, not a fix
+ok   URL audit: a repeated image counts once, and one without alt is caught
+ok   URL audit: Japanese title and description are measured by width, not characters
+ok   URL audit: the TOP 3 contain no utility page
+ok   URL audit: fast
 
 all checks passed (synthetic data: this tests the mechanics, not SEO results)

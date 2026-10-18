@@ -1,6 +1,6 @@
 # Reading the numbers: what Search Console says, what the autopilot does
 
-Source: `kleap search-console <site> --period 28d --json` (clicks, impressions, CTR %, average position, top 10 queries, top 10 pages).
+Source: `npx -y kleap-cli@2.1.0 search-console <site> --period 28d --json` (clicks, impressions, CTR %, average position, top 10 queries, top 10 pages).
 Two lists, not page x query: confirm which page ranks for a query by reading that page before you rewrite it.
 
 | What you see | What it means | Autopilot action | Not an autopilot job (tell the owner) |

@@ -5,23 +5,25 @@
 //   node seo-audit.mjs --url https://example.com [--json] [--max-pages 12]                  ANY public site, no account, no Kleap CLI
 //
 // <app> = app id, slug, slug.kleap.io URL or connected custom domain (anything the kleap CLI accepts).
-// Kleap mode calls only `kleap status`, `kleap files ls|cat`, `kleap search-console` (and, with --live, plain GET requests on the site's own
+// Kleap mode calls only `npx -y kleap-cli@2.1.0 status`, `npx -y kleap-cli@2.1.0 files ls|cat`, `npx -y kleap-cli@2.1.0 search-console` (and, with --live, plain GET requests on the site's own
 // public pages). External mode only does plain GET/HEAD requests on the public site. Neither mode writes or publishes anything.
 //
 // Output: a checklist score (our own, 0-100, NOT a Google metric), TOP 3 fixes (skipping what was fixed recently or reverted: it reads
 // $KLEAP_SEO_HOME/log.jsonl unless --no-skip), growth ideas for when the basics are clean, Search Console state.
-// Auth for Kleap mode is whatever the CLI already has (`kleap auth login` token or KLEAP_API_KEY). Zero dependencies, Node >= 18.
+// Auth for Kleap mode is whatever the CLI already has (`npx -y kleap-cli@2.1.0 auth login` token or KLEAP_API_KEY). Zero dependencies, Node >= 18.
 import dns from "node:dns";
 dns.setDefaultResultOrder("ipv4first"); // some networks resolve an IPv6 address they cannot route: the free URL audit must not fail on the first command because of that
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import https from "node:https";
+import http from "node:http";
 
 const args = process.argv.slice(2);
 const flag = (n) => args.includes(n);
 const opt = (n, d) => (args.includes(n) ? args[args.indexOf(n) + 1] : d);
-const VALUE_OPTS = ["--max-pages", "--url"];
+const VALUE_OPTS = ["--max-pages", "--url", "--max-seconds"];
 const positional = args.filter((a, i) => !a.startsWith("--") && !(i > 0 && VALUE_OPTS.includes(args[i - 1])));
 const APP = positional[0];
 const EXTERNAL_URL = opt("--url", null);
@@ -69,7 +71,9 @@ function kleap(cliArgs, { json = true } = {}) {
 }
 
 // ── shared helpers ──────────────────────────────────────────────────────────────────────────
-const decode = (s) => String(s).replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&nbsp;/g, " ").replace(/&#x27;/g, "'");
+const decode1 = (s) => String(s).replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16))).replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+  .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+const decode = (s) => decode1(decode1(s)); // twice: some pages double-encode (&amp;#039;)
 const words = (t) => (t ? t.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length : 0);
 const SEO_HOME = process.env.KLEAP_SEO_HOME || path.join(os.homedir(), ".kleap-seo");
 const findings = [];
@@ -143,6 +147,8 @@ function render(report, { external }) {
   const rest = all.filter((f) => !top3.includes(f) && !waiting.some((w) => w.page === f.page && w.type === f.type));
   if (rest.length) console.log(`OTHER (${rest.length}): ` + rest.slice(0, 12).map((f) => `${f.page} ${f.type}`).join(" | "));
   if (waiting.length) console.log(`WAITING (${waiting.length}): ` + waiting.map((w) => `${w.page} ${w.type} (${w.reason})`).join(" | "));
+  if (report.owner_notes?.length) console.log(`FOR THE OWNER (not fixes): ` + report.owner_notes.slice(0, 5).join(" | "));
+  if (report.partial) console.log(`NOTE: partial audit, stopped after ${report.pages_audited} pages because the site was slow (45 s cap). Raise it with --max-seconds.`);
   if (growth.length) {
     console.log(`GROWTH IDEAS (owner approves each one, never applied automatically):`);
     growth.forEach((g) => console.log(`  - ${g.type}: ${g.why}`));
@@ -156,24 +162,51 @@ function render(report, { external }) {
 // ═══════════════════════════════════════════════════════════════════════════════════════════
 //  EXTERNAL MODE: any public site, no account
 // ═══════════════════════════════════════════════════════════════════════════════════════════
+// Pages that exist for the product, not for Google: never worth a title rewrite, never in the TOP 3 (a login page is not the owner's problem).
+const UTILITY = /^\/(log-?in|sign-?in|sign-?up|register|account|accounts|billing|checkout|cart|admin|dashboard|access|blocked|verify[\w-]*|unsubscribe|password|reset[\w-]*|thank-?you|thanks|confirm[\w-]*|oauth|auth|api|cdn-cgi|404|preferences|settings|invite)(\/|$)/i;
+
 async function externalAudit() {
-  const UA = { "user-agent": "kleap-seo-autopilot/0.2 (read-only audit)" };
+  const UA = { "user-agent": "kleap-seo-autopilot/0.3 (read-only audit; https://kleap.co)" };
+  const deadline = Date.now() + Number(opt("--max-seconds", 45)) * 1000;
+  // IPv4 first and our own redirect handling: on networks with a broken IPv6 route Node's fetch can time out four times in a row, https.request with family 4 does not.
+  const rawGet = (u, { method = "GET", timeout = 6000, redirects = 5, family = 4 } = {}) => new Promise((resolve, reject) => {
+    const url = new URL(u);
+    const lib = url.protocol === "http:" ? http : https;
+    const req = lib.request(url, { method, family, timeout, headers: { ...UA, "accept-encoding": "identity", accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" } }, (res) => {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects > 0) { res.resume(); resolve(rawGet(new URL(res.headers.location, url).href, { method, timeout, redirects: redirects - 1, family })); return; }
+      const chunks = []; let size = 0, finished = false;
+      const finish = () => { if (finished) return; finished = true; resolve({ status: res.statusCode, url: url.href, headers: { get: (k) => res.headers[String(k).toLowerCase()] ?? null }, text: async () => Buffer.concat(chunks).toString("utf8") }); };
+      res.on("data", (c) => { size += c.length; if (size <= 2_000_000) chunks.push(c); else res.destroy(); });
+      res.on("end", finish); res.on("close", finish); res.on("error", finish);
+    });
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", reject);
+    req.end();
+  });
   const get = async (u, init = {}) => {
-    try { return await fetch(u, { redirect: "follow", headers: UA, signal: AbortSignal.timeout(15000), ...init }); } catch { return null; }
+    try { return await rawGet(u, { method: init.method || "GET" }); } catch (e) {
+      if (!/ENOTFOUND|EAFNOSUPPORT|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH/.test(String(e.code || e.message))) { if (/timeout|ECONNRESET/.test(String(e.code || e.message))) return null; }
+      try { return await fetch(u, { redirect: "follow", headers: UA, signal: AbortSignal.timeout(6000), ...init }); } catch { return null; } // IPv6-only hosts
+    }
   };
   let start;
   try { start = new URL(/^https?:\/\//i.test(EXTERNAL_URL) ? EXTERNAL_URL : "https://" + EXTERNAL_URL); } catch { console.error("not a valid URL: " + EXTERNAL_URL); process.exit(2); }
   const home = await get(start.href);
-  if (!home) { console.error(`could not reach ${start.href}`); process.exit(1); }
+  if (!home) { console.error(`could not reach ${start.href} (offline, blocked, or not a public site)`); process.exit(1); }
   const origin = new URL(home.url).origin;
   const sameSite = (u) => { try { const a = new URL(u).hostname.replace(/^www\./, ""); return a === new URL(origin).hostname.replace(/^www\./, ""); } catch { return false; } };
-  const norm = (u) => { const x = new URL(u); x.hash = ""; x.search = ""; x.pathname = x.pathname.replace(/\/index\.(html?|php)$/i, "/"); return x.origin + (x.pathname.length > 1 ? x.pathname.replace(/\/+$/, "") : "/"); }; // /index.html IS the folder URL: one page, not two
+  const norm = (u) => { const x = new URL(u); x.hash = ""; x.search = ""; x.pathname = x.pathname.replace(/\/index(\.(?:html?|php))?$/i, "/"); return x.origin + (x.pathname.length > 1 ? x.pathname.replace(/\/+$/, "") : "/"); }; // /index.html IS the folder URL: one page, not two
 
   const parse = (html) => {
     const tag = (re) => { const m = html.match(re); return m ? decode(m[1].trim()) : null; };
     const metas = [...html.matchAll(/<meta\b[^>]*>/gi)].map((m) => m[0]);
     const meta = (key, val) => { for (const m of metas) { const k = (m.match(new RegExp(`\\b${key}\\s*=\\s*["']([^"']*)["']`, "i")) || [])[1]; if (k && k.toLowerCase() === val) { const c = (m.match(/\bcontent\s*=\s*"([^"]*)"|\bcontent\s*=\s*'([^']*)'/i) || []); return decode((c[1] ?? c[2] ?? "").trim()); } } return null; };
-    const imgs = [...html.matchAll(/<img\b[^>]*>/gi)].map((m) => m[0]);
+    // images, counted once per distinct src (carousels and <picture> repeat the same image many times): missing alt = no occurrence of that src carries an alt attribute
+    const bySrc = new Map();
+    for (const t of [...html.matchAll(/<img\b[^>]*>/gi)].map((m) => m[0])) {
+      const src = (t.match(/\b(?:data-src|src)\s*=\s*["']([^"']+)["']/i) || [])[1] || t;
+      bySrc.set(src, (bySrc.has(src) ? bySrc.get(src) : true) && /\balt\s*=/i.test(t)); // an image is fine only if EVERY occurrence of it has alt
+    }
     const body = html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<!--[\s\S]*?-->/g, " ");
     const links = [...html.matchAll(/<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)].map((m) => (m[1] ?? m[2]).trim());
     return {
@@ -181,17 +214,43 @@ async function externalAudit() {
       canonical: (html.match(/<link\b[^>]*rel\s*=\s*["']canonical["'][^>]*href\s*=\s*["']([^"']+)["']/i) || [])[1] || null,
       lang: (html.match(/<html\b[^>]*\blang\s*=\s*["']([^"']+)["']/i) || [])[1] || null,
       viewport: meta("name", "viewport"), robots: meta("name", "robots"), ogImage: meta("property", "og:image"),
-      h1: (html.match(/<h1\b/gi) || []).length, imgs: imgs.length, imgsMissingAlt: imgs.filter((t) => !/\balt\s*=/i.test(t)).length,
+      h1: (html.match(/<h1\b/gi) || []).length, imgs: bySrc.size, imgsMissingAlt: [...bySrc.values()].filter((hasAlt) => !hasAlt).length,
       jsonld: (html.match(/<script[^>]+application\/ld\+json/gi) || []).length,
       words: words(decode(body.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim()), links,
       text: decode(body.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").toLowerCase(),
     };
   };
 
-  // seed: homepage links + sitemap
   const pages = new Map(); // url -> {status, ...parsed}
+  const status = new Map();
+  const seenQ = new Set();
   const homeUrl = norm(home.url);
-  const queue = [homeUrl];
+  const ingest = async (u, r) => {
+    status.set(u, r ? r.status : 0);
+    if (!r) return null;
+    const ct = r.headers.get("content-type") || "";
+    if (r.status >= 400 || !/html/i.test(ct)) { if (r.status >= 400) pages.set(u, { status: r.status }); return null; }
+    const p = parse(await r.text());
+    pages.set(u, { status: r.status, ...p });
+    return p;
+  };
+  const candidates = (p, u) => {
+    const out = [];
+    for (const h of p.links || []) {
+      if (/^(mailto:|tel:|javascript:|#)/i.test(h)) continue;
+      let abs; try { abs = new URL(h, u).href; } catch { continue; }
+      if (!sameSite(abs)) continue;
+      if (/\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|css|js|ico|xml|txt|mp4|woff2?)$/i.test(new URL(abs).pathname)) continue;
+      out.push(norm(abs));
+    }
+    return out;
+  };
+  // 1. the homepage, alone. 2. the pages it links to (what a visitor can reach first), then the sitemap's pages. Utility pages (login, billing...) go last.
+  seenQ.add(homeUrl);
+  const hp = await ingest(homeUrl, home);
+  const queue = [];
+  const enqueue = (u) => { if (!seenQ.has(u) && !queue.includes(u)) queue.push(u); };
+  if (hp) candidates(hp, homeUrl).forEach(enqueue);
   const sm = await get(origin + "/sitemap.xml") ?? null;
   let sitemapOk = !!sm && sm.status === 200;
   let smText = sitemapOk ? await sm.text() : "";
@@ -199,39 +258,41 @@ async function externalAudit() {
   const locs = [...smText.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map((m) => m[1]);
   const subMaps = locs.filter((l) => /\.xml$/i.test(l)).slice(0, 2);
   for (const sub of subMaps) { const r = await get(sub); if (r && r.status === 200) locs.push(...[...(await r.text()).matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map((m) => m[1])); }
-  for (const l of locs.filter((l) => !/\.xml$/i.test(l) && sameSite(l))) { try { queue.push(norm(l)); } catch {} }
+  for (const l of locs.filter((l) => !/\.xml$/i.test(l) && sameSite(l))) { try { enqueue(norm(l)); } catch {} }
+  const rank = (u) => (UTILITY.test(new URL(u).pathname) ? 1 : 0);
+  queue.sort((x, y) => rank(x) - rank(y)); // stable: homepage links keep their order, utility pages sink
 
-  const seenQ = new Set();
-  const status = new Map();
-  while (queue.length && pages.size < MAX_PAGES) {
-    const u = queue.shift();
-    if (seenQ.has(u)) continue;
-    seenQ.add(u);
-    const r = await get(u);
-    if (!r) { status.set(u, 0); continue; }
-    status.set(u, r.status);
-    const ct = r.headers.get("content-type") || "";
-    if (r.status >= 400 || !/html/i.test(ct)) { if (r.status >= 400) pages.set(u, { status: r.status }); continue; }
-    const p = parse(await r.text());
-    pages.set(u, { status: r.status, ...p });
-    for (const h of p.links) {
-      if (/^(mailto:|tel:|javascript:|#)/i.test(h)) continue;
-      let abs; try { abs = new URL(h, u).href; } catch { continue; }
-      if (!sameSite(abs)) continue;
-      if (/\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|css|js|ico|xml|txt|mp4|woff2?)$/i.test(new URL(abs).pathname)) continue;
-      const n = norm(abs);
-      if (!seenQ.has(n) && !queue.includes(n)) queue.push(n);
+  // parallel crawl: 5 at a time, 6 s per request, 45 s in total (a slow site gives a partial audit, said so, instead of a minute-long wait)
+  let partial = false;
+  const active = new Set();
+  while ((queue.length || active.size) && seenQ.size < MAX_PAGES) {
+    if (Date.now() > deadline) { partial = true; break; }
+    while (queue.length && active.size < 5 && seenQ.size < MAX_PAGES) {
+      const u = queue.shift();
+      if (seenQ.has(u)) continue;
+      seenQ.add(u);
+      const task = (async () => { const r = await get(u); const p = await ingest(u, r); if (p) candidates(p, u).forEach(enqueue); })().catch(() => {}).finally(() => active.delete(task));
+      active.add(task);
     }
+    if (active.size) await Promise.race(active);
   }
+  await Promise.allSettled([...active]);
   const okPages = [...pages.entries()].filter(([, p]) => p.status < 400 && p.title !== undefined);
   const route = (u) => { const x = new URL(u); return x.pathname.length > 1 ? x.pathname : "/"; };
 
   const titleCount = {}, descCount = {};
   for (const [, p] of okPages) { if (p.title) titleCount[p.title.toLowerCase()] = (titleCount[p.title.toLowerCase()] || 0) + 1; if (p.description) descCount[p.description.toLowerCase()] = (descCount[p.description.toLowerCase()] || 0) + 1; }
   const dupReported = new Set();
+  const owner_notes = [];
   for (const [u, p] of okPages) {
     const r = route(u);
-    if (/noindex/i.test(p.robots || "")) { add(r, "noindex", 9, "page carries a noindex robots tag (Google will not list it)", "remove noindex if the page should rank"); continue; }
+    if (/noindex/i.test(p.robots || "")) {
+      // deliberate on login/offer/thank-you pages, a disaster on the homepage: only the homepage is a finding, every other page is a note for the owner
+      if (r === "/") add(r, "noindex", 9, "the HOMEPAGE carries a noindex robots tag (Google will not list the site)", "remove noindex from the homepage unless the site is meant to stay private");
+      else owner_notes.push(`${r} is noindex (fine if intended, e.g. a login, thank-you or private offer page)`);
+      continue;
+    }
+    if (UTILITY.test(r)) continue;
     if (!p.title) add(r, "missing_title", 10, "no <title>", "add a unique, keyword-led title (30-60 chars)");
     else {
       if (wlen(p.title) < T.titleMin) add(r, "title_short", 5, `title is ${wlen(p.title)} chars: "${p.title}"`, `rewrite to ${T.titleMin}-${T.titleMax} chars with the main keyword + business/location`);
@@ -262,17 +323,17 @@ async function externalAudit() {
   for (const [u, p] of okPages) for (const h of p.links || []) { try { const abs = new URL(h, u).href; if (sameSite(abs) && !/\.[a-z0-9]{2,5}$/i.test(new URL(abs).pathname)) { const n = norm(abs); if (!linkedFrom.has(n)) linkedFrom.set(n, route(u)); } } catch {} }
   // a page that 404s AND is linked from another page is ONE problem (the dead link, reported below), not two: only report it alone when nothing on the site links to it (e.g. a sitemap entry)
   for (const [u, p] of pages) if (isGone(p.status) && !linkedFrom.has(norm(u))) add(route(u), "live_not_200", 10, `answers ${p.status}`, "fix or redirect the page");
-  let probes = 0;
+  const toProbe = [...linkedFrom].filter(([n]) => status.get(n) === undefined && !UTILITY.test(new URL(n).pathname)).slice(0, 25);
+  await Promise.all(toProbe.map(async ([n]) => { const r = Date.now() > deadline ? null : await get(n, { method: "HEAD" }); status.set(n, r ? r.status : 0); }));
   for (const [n, from] of linkedFrom) {
-    let st = status.get(n);
-    if (st === undefined && probes < 25) { probes++; const r = await get(n, { method: "HEAD" }); st = r ? r.status : 0; }
-    if (isGone(st)) add(from, "dead_internal_link", 7, `links to ${route(n)}, which answers ${st}`, "point it to an existing page or create the page");
+    const st = status.get(n);
+    if (isGone(st) && !UTILITY.test(new URL(n).pathname)) add(from, "dead_internal_link", 7, `links to ${route(n)}, which answers ${st}`, "point it to an existing page or create the page");
   }
   const rb = await get(origin + "/robots.txt");
   if (!rb || rb.status !== 200) add("/robots.txt", "live_not_200", 3, "no robots.txt", "add one that allows crawling and points to the sitemap");
   if (!sitemapOk) add("/sitemap.xml", "live_not_200", 4, "no sitemap.xml or sitemap-index.xml", "publish a sitemap so Google finds every page");
 
-  const routes = okPages.map(([u]) => route(u));
+  const routes = okPages.map(([u]) => route(u)).filter((r) => !UTILITY.test(r));
   const score = scoreOf(routes.length ? routes : ["/"]);
   const { top3, waiting } = pickTop3(new Map());
   const growth = [];
@@ -280,7 +341,7 @@ async function externalAudit() {
   if (!okPages.some(([, p]) => /faq|frequently asked|\?/.test((p.text || "").slice(0, 20000)) && p.jsonld > 0)) growth.push({ type: "no_faq", why: "no FAQ section with structured data: questions customers really ask can earn rich results" });
   const report = {
     mode: "external", url: origin, app_id: null, name: new URL(origin).hostname, production_url: origin, published: true,
-    pages_audited: okPages.length, finding_count: findings.length, top3, findings: findings.sort((a, b) => b.impact - a.impact), waiting, score, growth, gsc: { connected: false, note: "external mode" }, live: [],
+    pages_audited: okPages.length, partial, owner_notes, finding_count: findings.length, top3, findings: findings.sort((a, b) => b.impact - a.impact), waiting, score, growth, gsc: { connected: false, note: "external mode" }, live: [],
     next_step: "Automatic fixing works on sites hosted on Kleap (https://kleap.co).",
   };
   if (AS_JSON) console.log(JSON.stringify(report, null, 2)); else render(report, { external: true });
@@ -363,7 +424,7 @@ function internalLinks(src) {
 // ── 1. read the site ────────────────────────────────────────────────────────────────────────
 let status;
 try { status = kleap(["status", APP]); } catch (e) {
-  console.error(e.auth ? `STOP: the Kleap login or key was refused (${String(e.message).slice(0, 160)}). Run: kleap auth logout && kleap auth login   (or create a Full key at https://kleap.co/settings/api-key)` : String(e.message));
+  console.error(e.auth ? `STOP: the Kleap login or key was refused (${String(e.message).slice(0, 160)}). Run: npx -y kleap-cli@2.1.0 auth logout && npx -y kleap-cli@2.1.0 auth login   (or create a Full key at https://kleap.co/settings/api-key)` : String(e.message));
   process.exit(e.auth ? 4 : 1);
 }
 const appId = status.app_id ?? status.id ?? APP;
@@ -481,15 +542,29 @@ if (!flag("--no-gsc")) {
       const opp = (g.top_queries || []).filter((q) => q.impressions >= T.gscMinImpressions && q.ctr < T.gscMaxCtrPct && q.position <= T.gscMaxPosition);
       const topPage = [...(g.top_pages || [])].sort((a, b) => b.impressions - a.impressions)[0];
       gsc = { connected: true, state: "ok", period: g.period, clicks: g.clicks, impressions: g.impressions, ctr: g.ctr, position: g.position, top_pages: g.top_pages || [], top_queries: g.top_queries || [], low_ctr_queries: opp };
+      // Search Console gives top queries and top pages as TWO lists. The page a query belongs to is the one whose title/h1/text actually uses the query's words
+      // (ties: the page Google shows most). A query no page uses is not a metadata problem: it becomes a growth idea (query_without_page), never a title rewrite.
+      const cand = pages.filter((p) => !p.dynamic && !p.noindex);
+      const qtoks = (q) => q.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3);
+      const pageImpr = Object.fromEntries((g.top_pages || []).map((tp) => { try { return [new URL(tp.page, "https://x").pathname.replace(/(.)\/$/, "$1"), tp.impressions]; } catch { return [tp.page, tp.impressions]; } }));
+      const owner = (q) => {
+        const t = qtoks(q.query);
+        if (!t.length) return null;
+        const scored = cand.map((p) => ({ p, cov: t.filter((w) => `${p.text} ${p.title?.value || ""} ${p.description?.value || ""}`.toLowerCase().includes(w)).length / t.length }))
+          .sort((a, b) => b.cov - a.cov || (pageImpr[b.p.route] || 0) - (pageImpr[a.p.route] || 0));
+        return scored[0] && scored[0].cov >= 0.67 ? scored[0].p : null;
+      };
       for (const q of opp) {
-        add(topPage ? new URL(topPage.page, "https://x").pathname : "(unknown page)", "gsc_low_ctr", 9,
+        const own = owner(q);
+        if (!own) continue;
+        add(own.route, "gsc_low_ctr", 9,
           `"${q.query}": ${q.impressions} impressions, ${q.ctr}% CTR, position ${q.position}`,
-          "rewrite the title + meta description of the page that ranks for it so they match the query intent (queries and pages are separate lists: confirm the page by reading its content). Verify by the served title, not by this finding: it stays until Google re-crawls");
+          "rewrite the title + meta description of this page so they match the query intent (this page uses the query's words; Google lists queries and pages separately, so read the page before you write). Verify by the served title, not by this finding: it stays until Google re-crawls");
       }
     }
   } catch (e) {
     gsc = e.auth
-      ? { connected: false, state: "auth_error", note: "this Kleap login or key cannot read Search Console (INSUFFICIENT_SCOPE or 401). Fix: `kleap auth logout && kleap auth login` (logins made with an older CLI lack the analytics scope) or use a Full-preset key. This is NOT the same as 'not connected'." }
+      ? { connected: false, state: "auth_error", note: "this Kleap login or key cannot read Search Console (INSUFFICIENT_SCOPE or 401). Fix: `npx -y kleap-cli@2.1.0 auth logout && npx -y kleap-cli@2.1.0 auth login` (logins made with an older CLI lack the analytics scope) or use a Full-preset key. This is NOT the same as 'not connected'." }
       : { connected: false, state: "error", note: String(e.message).slice(0, 200) };
   }
 }

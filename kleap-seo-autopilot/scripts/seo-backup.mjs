@@ -2,11 +2,11 @@
 // kleap-seo-autopilot / seo-backup.mjs — back a file up before you change it, put it back if the change goes wrong.
 //
 //   node seo-backup.mjs backup  <app> <path...>            copy the CURRENT source of each file to $KLEAP_SEO_HOME/backups/<app>/<date>/<path>
-//   node seo-backup.mjs restore <app> <path> [--date D]    write the newest backup (or the one from date D) back with `kleap files write`
+//   node seo-backup.mjs restore <app> <path> [--date D]    write the newest backup (or the one from date D) back with `npx -y kleap-cli@2.1.0 files write`
 //   node seo-backup.mjs list    <app>                      what is backed up
 //
-// After a restore you still run `kleap publish <app>` yourself (one publish per run, you decide when).
-// Uses the kleap CLI and whatever auth it already has (`kleap auth login` or KLEAP_API_KEY). Zero dependencies, Node >= 18.
+// After a restore you still run `npx -y kleap-cli@2.1.0 publish <app>` yourself (one publish per run, you decide when).
+// Uses the kleap CLI and whatever auth it already has (`npx -y kleap-cli@2.1.0 auth login` or KLEAP_API_KEY). Zero dependencies, Node >= 18.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -55,7 +55,7 @@ if (cmd === "backup") {
   const src = date && path.join(dir, date, p);
   if (!src || !fs.existsSync(src)) die(`no backup of ${p} for ${app}${date ? " on " + date : ""}`);
   kleap(["files", "write", app, p, "--file", src]);
-  console.log(`restored ${p} from ${date}. Now run: kleap publish ${app}`);
+  console.log(`restored ${p} from ${date}. Now run: npx -y kleap-cli@2.1.0 publish ${app}`);
 } else if (cmd === "list") {
   if (!fs.existsSync(dir)) { console.log("no backups yet"); process.exit(0); }
   for (const d of fs.readdirSync(dir).sort()) {

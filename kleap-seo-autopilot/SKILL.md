@@ -1,11 +1,12 @@
 ---
 name: kleap-seo-autopilot
 description: >-
-  Your agent fixes the 3 biggest SEO problems on your Kleap website, publishes them and checks they are live, learns from
-  the results and tells you what changed: titles, meta descriptions, image alt text, dead links, schema, Google queries seen
-  but not clicked. Free audit for any URL, no account. Use when the user says "improve my SEO", "SEO autopilot", "audit my
-  site", "why am I not on Google", or schedules a recurring agent task on a site built with Kleap.
-version: 0.2.0
+  Free SEO audit of any website, no account. On a Kleap site your agent also fixes the top 3 problems, publishes them, checks
+  the page is live and tells you what changed: titles, meta descriptions, image alt text, dead links, schema, Google queries
+  seen but not clicked. It asks before the first publish, refuses to ship your unfinished edits, remembers inside your site and
+  learns from the results. Use when the user says "improve my SEO", "SEO autopilot", "audit my site", "why am I not on Google",
+  or schedules a recurring agent task on a site built with Kleap.
+version: 0.2.1
 license: MIT
 compatibility: "Claude Code, OpenClaw, Hermes Agent, Codex, Grok Build and any Agent Skills client with a shell and Node >= 18. Agents without a shell (ChatGPT, Claude.ai, Grok API) run the same loop through the Kleap MCP connector: see prompts/."
 metadata:
@@ -20,28 +21,30 @@ metadata:
     envVars:
       - name: KLEAP_API_KEY
         required: false
-        description: "kleap_live_sk_... key (Full preset), only for unattended runs. Interactive use signs in with `kleap auth login` and needs no key. The free URL audit needs neither."
+        description: "kleap_live_sk_... key (Full preset), only for unattended runs. Interactive use signs in with `npx -y kleap-cli@2.1.0 auth login` and needs no key. The free URL audit needs neither."
 ---
 
 # Kleap SEO autopilot
 
-Your agent fixes the **3 biggest SEO problems** on your Kleap site, publishes them, proves the page is live, and tells you exactly what changed.
-It remembers what it did, checks later whether it helped, and gets better at your site. Edits are direct file edits: no Kleap AI, no credits spent by the skill.
+**Free SEO audit of any website in seconds, no account.** On a site hosted on Kleap, your agent also fixes the **3 biggest problems**, publishes them, proves the page is live, and tells you exactly what changed.
+It asks before the first publish, remembers what it did inside your site, checks later whether it helped, and gets better at your site. Edits are direct file edits: no Kleap AI, no credits spent by the skill.
 
 | Level | What | Needs |
 |---|---|---|
 | **0 Audit** | Checklist score + top fixes for **any public website** | Node only. No account, no key |
-| **1 Fix** | Fixes the top 3, publishes, verifies it is live, undoes failures, reports | A site on Kleap + `kleap auth login` |
+| **1 Fix** | Fixes the top 3, publishes, verifies it is live, undoes failures, reports | A site on Kleap + `npx -y kleap-cli@2.1.0 auth login` |
 | **2 Grow** | Once the basics pass: one proposal a week (new page, FAQ, answer to a Google query), only with the owner's yes | Level 1 |
 
-**Real runs** (a test site we seeded; 2026-10-18; each one a brand-new Claude Code session that had only this skill; skill credits spent: 0). Full transcripts: `references/proof.md`.
+**Real runs** (a test site we seeded, 2026-10-18; a new Claude Code session that had only this skill, or only the Kleap connector; skill credits billed: 0). Transcripts and honest labels: `references/proof.md`.
 
 | Run | What happened |
 |---|---|
-| 1. First run (85 s) | Audited, showed 3 fixes as before -> after, **asked**, published nothing |
-| 2. Owner says "yes" (94 s) | Backup, edits, one publish, `live_verified: true`, served page checked. Checklist **50 -> 88** |
-| 3. Next day, another machine (160 s) | Read its memory from the site, fixed what was left, **88 -> 100**, proposed growth ideas without building them |
-| 4. Owner had unpublished edits | **Refused to publish** them by accident, reported the draft, asked |
+| 1. First run (97 s) | Audited, showed 3 fixes as before -> after, **asked**, published nothing |
+| 2. Owner says "yes" (117 s) | Backup, edits, one publish, `live_verified: true`, served page checked. Checklist **50 -> 88** |
+| 3. Next day on an empty machine (clock set to the next day, 274 s) | Pulled its memory from the site, fixed the last item, **88 -> 100**, proposed growth ideas without building them |
+| 4. Revert from yet another empty machine | Undid exactly its last edit from the memory in the site (no local backup), republished, left the earlier fixes |
+| 5. Owner left unpublished edits | **Refused to publish** them, named them, offered 3 ways forward; after the owner published, one sentence re-baselined it |
+| 6. Connector only (no shell, no files) | Same loop through MCP tools; the memory it wrote is read by the scripts |
 
 | Page | Problem | Before | After |
 |---|---|---|---|
@@ -49,21 +52,22 @@ It remembers what it did, checks later whether it helped, and gets better at you
 | `/` | no meta description | *(none: Google invents a snippet)* | `Stay at Hotel Kleap Prod Check: unwind in the Deluxe Room, relax by the Rooftop Pool, and send a stay enquiry to plan your next escape.` |
 | `/` | menu link to a page that does not exist | `/spa` | link removed, text kept, owner told |
 
-**Not proven yet: traffic.** Google needs weeks and the first long-run results are not in. Day one proves that every change is small, visible, checked live and reversible; `references/proof.md`
-says exactly what would count as proof and how this skill collects it. `node scripts/selftest.mjs` checks the memory logic offline. Risks and undo: `skill-card.md`.
+**How much is there to fix?** The free audit on 150 random sites published on Kleap: 46% already score 100/100, 41% have something worth fixing first (26% a title under 30 characters, 9% a dead link, 4% no `<h1>`, 2% no meta description). So the fix loop has real work on about 4 sites in 10, then runs dry: that is why a clean site is reported as a win and followed by ONE approved growth idea a week, not by daily "fixes".
+**Not proven yet: traffic.** Google needs weeks and the first long-run results are not in. Day one proves that every change is small, visible, checked live and reversible; `references/proof.md` says what would count as proof and how this skill collects it. `node scripts/selftest.mjs` runs 37 offline checks. Risks and undo: `skill-card.md`.
 
-**Try it in 60 seconds:** `node scripts/seo-audit.mjs --url https://your-site.com` (works on any public site), or tell your agent: *"Use the kleap-seo-autopilot skill on my-site.kleap.io."*
+**Try it now:** `node scripts/seo-audit.mjs --url https://your-site.com` (any public site, read-only, 3-10 seconds on a normal site; with nothing installed: `curl -fsSL https://raw.githubusercontent.com/kleaphq/skills/main/kleap-seo-autopilot/scripts/seo-audit.mjs | node - --url https://your-site.com`, one file of plain GET requests: read it first), or tell your agent: *"Use the kleap-seo-autopilot skill on my-site.kleap.io."*
+Not sure it is ready on this machine? `node scripts/seo-doctor.mjs my-site.kleap.io` prints a checklist and the one next step.
 
-`SKILL_DIR` = the folder holding this file. `SEO_HOME` = `${KLEAP_SEO_HOME:-$HOME/.kleap-seo}` (a local cache of the memory). `K` = `npx -y kleap-cli@2.1.0`
+`SKILL_DIR` = the folder holding this file (scripts, `references/memory-format.md`, `skill-card.md`). `SEO_HOME` = `${KLEAP_SEO_HOME:-$HOME/.kleap-seo}` (a local cache of the memory). `K` = `npx -y kleap-cli@2.1.0`
 (pinned on purpose; or `kleap` after `npm i -g kleap-cli`, then `export KLEAP_BIN=kleap`). Every `$K` command takes `--json`; exit 0 = ok.
 
 ## Hard rules (read first)
 
 1. **Connect before anything.** Run `node $SKILL_DIR/scripts/seo-doctor.mjs [site]`. If it prints a `NEXT:` line, do that and stop. Never ask the owner to paste a key into the chat.
 2. **The first run on a site proposes; it does not publish.** Show the fixes as before -> after, ask once, apply on "yes". Skip the question only if the owner's own message already says to go ahead (apply, go, do it, autopilot, every day, schedule it) or `brief` says `"mode":"auto"`. `"mode":"pause"` means do nothing.
-3. **Never ship someone else's work.** `seo-log.mjs drift` must say `clean` (or the owner said "publish everything as it is"). Publishing deploys every unpublished edit in the site, not just yours. On `drift`: audit, propose, do not publish.
+3. **Never ship someone else's work.** `seo-log.mjs drift` must say `clean` (or the owner said "publish everything as it is"). Publishing deploys every unpublished edit in the site, not just yours. On `drift`: audit, propose, do not publish, name the changed files. If the owner says they already published those edits themselves: `seo-log.mjs rebaseline $SITE`, then continue (an unattended run cannot know, so it stays safe and says so every time).
 4. **Edit with `$K files edit` only**, after `seo-backup.mjs backup`. Never `$K edit`, `$K create` or `modify_app` (Kleap's AI: it spends credits and rewrites more than you asked).
-5. **Verify live or undo.** One publish per site per run; success = `"status":"published"` and `report.live_verified:true`; otherwise restore the backup and publish again.
+5. **Verify live or undo.** One publish per site per run; success = `"status":"published"` and `report.live_verified:true`; otherwise undo your edits (`seo-log.mjs undo`) and publish again.
 6. **Never invent, never delete.** No made-up prices, phones, addresses, ratings, years. Never delete a page or section of the owner's (removing a file YOU created in this same run, to undo it, is the one exception), change a URL, add `noindex`, or touch `public/robots.txt`, `astro.config.mjs`, `package.json`, `src/layouts/Base.astro`.
 
 ## 1. Connect Kleap (once per machine, 1 minute)
@@ -85,7 +89,8 @@ node $SKILL_DIR/scripts/seo-doctor.mjs my-site.kleap.io      # checklist + the o
 node $SKILL_DIR/scripts/seo-audit.mjs --url https://example.com          # add --json for machines
 ```
 Read-only GET requests on the public pages (homepage + sitemap, 12 pages by default). Prints the checklist score (our own 0-100, not a Google metric), the top 3 problems with the fix for each, and growth ideas.
-Then tell the owner the honest next step: fixing these automatically (edit, publish, verify, undo) works for sites hosted on Kleap; for any other host, the list is theirs to apply.
+Then give the owner a first win, not a list: for the top problem write the exact new title (30-60 chars, main keyword first) and meta description (70-160) using only what the page already says, ready to paste.
+Pages that exist for the product (login, billing, checkout...) are ignored on purpose, and a `noindex` page is only a note for the owner, never a fix. Then tell the owner the honest next step: fixing these automatically (edit, publish, verify, undo) works for sites hosted on Kleap; for any other host, the list is theirs to apply.
 No Kleap site yet and they want one? `$K auth login` creates the account in the browser, and the sibling skill `kleap-build` (same repo) builds a site from a description; this skill takes over once it is published.
 
 ## 3. Level 1, first run on a site (attended, about 2 minutes)
@@ -97,6 +102,7 @@ node $SKILL_DIR/scripts/seo-log.mjs brief $SITE               # first_run, mode,
 node $SKILL_DIR/scripts/seo-log.mjs drift $SITE               # none (first run) | clean | drift
 node $SKILL_DIR/scripts/seo-audit.mjs $SITE --live            # checklist score, TOP 3, WAITING, growth ideas, Search Console state
 ```
+0. **Search Console, day one.** If `brief`/the audit say it is not connected, tell the owner once: *"Without Search Console I can fix the basics but cannot tell you whether Google sends you more people. For a site on a `*.kleap.io` address it cannot be connected (the API answers `requires_custom_domain: true`); for a custom domain, `$K search-console connect $SITE` prints the one link to click."* Then go on: the loop still learns from analytics and from what the owner keeps or rewrites.
 1. **Choose the fixes** (<= 3). The audit already skips what was fixed in the last 14 days and what was reverted in the last 30. The audit ranks by impact (10 missing title, missing description, live page errors; 9 dead links, Google low-CTR rewrites, `noindex`; 8 duplicates; then no `<h1>`, orphan pages, short titles/descriptions, alt text, schema): take its TOP 3 as it is.
    How to write each one: `references/astro-seo-fixes.md`. Read the hero and about text first and keep the site's language, tone and product names. Apply `brief.lessons` and `owner_style` (section 5).
 2. **Show the plan, then ask once** (rule 2):
@@ -117,14 +123,14 @@ node $SKILL_DIR/scripts/seo-audit.mjs $SITE --live            # checklist score,
    ```
    Read `report`: a NEW `broken_links`, `dead_nav_links` or `incoherent_pages` caused by your change is a failure. A warning that was there before your change is reported, not chased
    (a "broken image" warning can be stale: `curl -sI <live-url>/uploads/x.jpg`; a `200` means leave it). A `gsc_low_ctr` finding stays in the audit until Google re-crawls: verify it by the served `<title>` and description (they equal what you wrote), not by the finding disappearing.
-   Undo: `node $SKILL_DIR/scripts/seo-backup.mjs restore $SITE <path> && $K publish $SITE`, then log `"reverted":true` (the pair is then blocked for 30 days).
-4. **Log and save the memory**, even when nothing was fixed. Add `gsc_before` (the page's row from the audit's `gsc.top_pages`) per fix when Search Console has it, it is what makes learning possible:
+   Undo: `node $SKILL_DIR/scripts/seo-log.mjs undo $SITE --apply && $K publish $SITE` reverses the exact find/replace pairs of the last run (from any machine) and leaves any text the owner has rewritten since; `seo-backup.mjs restore` is the whole-file fallback on the machine that made the backup. The pair is then blocked for 30 days.
+4. **Log and save the memory**, every run, even when nothing was fixed. Per fix record `edits` (the exact `--find`/`--replace` you used: it is what makes undo work), `analytics_before` (the page's row from `$K analytics $SITE --period 30d --json`, every site has it) and `gsc_before` (the page's row from the audit's `gsc.top_pages`, only with Search Console). Those baselines are what makes learning possible. The memory format is `references/memory-format.md`:
    ```bash
-   node $SKILL_DIR/scripts/seo-log.mjs add '{"site":"116838","name":"Hotel X","score":{"before":62,"after":88},"fixes":[{"page":"/","type":"title_short","before":"Hotel","after":"Hotel X — Rooms & Rooftop"}],"published":true,"live_verified":true,"reverted":false,"notes":""}'
+   node $SKILL_DIR/scripts/seo-log.mjs add '{"site":"116838","name":"Hotel X","score":{"before":62,"after":88},"edits":[{"path":"src/pages/index.astro","find":"title=\"Hotel\"","replace":"title=\"Hotel X — Rooms & Rooftop\""}],"fixes":[{"page":"/","type":"title_short","before":"Hotel","after":"Hotel X — Rooms & Rooftop","analytics_before":{"views":40}}],"published":true,"live_verified":true,"reverted":false,"notes":""}'
    node $SKILL_DIR/scripts/seo-log.mjs snapshot $SITE        # only after a successful publish: the state we shipped
    node $SKILL_DIR/scripts/seo-log.mjs push $SITE            # memory goes into the site (.kleap/seo-autopilot.json, not published)
    ```
-5. **Report** (3-6 lines per site): checklist before -> after, each change as before -> after, the live URL, what you skipped and why, what needs a human, and what happens next (tomorrow: what it will look at).
+5. **Report** (3-6 lines per site): checklist before -> after, each change as before -> after, the live URL, what you skipped and why, what needs a human, and what happens next (tomorrow: what it will look at). Save it as `$SEO_HOME/reports/<date>.md` and send it through the channel the owner already reads (the chat reply of a ChatGPT task, `--announce` on OpenClaw, a mail or chat tool if you have one): a report that lands only in a log file is not delivered.
 6. **Offer the habit:** "Want this every morning? Say *autopilot* and I will switch this site to automatic and give you the one line that schedules it on <your agent>." On yes: `node $SKILL_DIR/scripts/seo-log.mjs mode $SITE auto`, `push`, then the schedule line (section 7).
 
 A clean site (0 findings) is a win, not "nothing to do": report the score, then offer the first growth idea (section 6).
@@ -132,6 +138,7 @@ A clean site (0 findings) is a win, not "nothing to do": report the score, then 
 ## 4. Every day after that (autopilot)
 
 Same steps without the question: `pull`, `brief` (stop if paused or `remaining_today` is 0), `drift` (on `drift`: propose only), audit, fix <= 3, backup, publish once, verify, log, snapshot, push, report.
+When nothing changed and nothing needs the owner, the daily report is ONE line (`<site>: 100/100, nothing to fix`); the full report is Monday's. Every report ends with `node $SKILL_DIR/scripts/seo-log.mjs weekly | head -3` on Mondays: it warns when a site in autopilot has not run for 2+ days, so a stopped schedule is noticed.
 Max 3 fixes per site per day, max 5 files touched, one publish per run (you keep these; `brief` only counts fixes). If `brief` says `"mode":"propose"` in an unattended run: audit, write the plan into the report, apply nothing.
 **Pause:** `node $SKILL_DIR/scripts/seo-log.mjs mode $SITE pause` (owner says "stop", or you cannot tell what is going on). It is saved inside the site, so every machine that runs this skill stops at its next `pull`.
 
@@ -139,7 +146,7 @@ Max 3 fixes per site per day, max 5 files touched, one publish per run (you keep
 
 The memory lives in the site (`.kleap/seo-autopilot.json`), so a scheduled run on a fresh machine, a container or a cloud routine starts with the full history (`pull`). `brief` gives you what the history taught:
 - `lessons.dropped`: do not use those fix types on this account without asking. `lessons.doubleDown`: prefer them. `owner_style`: when the owner replaced one of your titles or descriptions, their wording is the style guide for the next one. `reverted_last_30d` and `touched_last_14d`: leave them alone.
-- `due_for_measure` not empty (fixes older than 14 days, never measured): run the command in `hint` (audit JSON + Search Console + analytics -> `seo-log.mjs measure`). Per fix it records: did the owner **keep** your wording; did **Google** move on that page (clicks, CTR, average position vs the day of the fix, only judged with >= 100 impressions); else did page **traffic** move (all sources, weaker evidence). The result feeds `lessons`.
+- `due_for_measure` not empty: run the command in `hint` (audit JSON + Search Console + analytics -> `seo-log.mjs measure`). Per fix it records, from day 3, did the owner **keep** your wording; from day 28, did **Google** move on that page (a 28-day window that starts after the fix vs the 28 days before it, per-day rates, only judged with >= 100 impressions; a 7-day window from day 14 is an "early read"); else, from day 30, did page **traffic** move (all sources, weaker evidence). The result feeds `lessons`.
 - Read the numbers like this (`references/diagnosis.md`): many impressions + low CTR = rewrite title and description; good CTR + few impressions = the page needs content and links (a Level 2 proposal); position > 20 = content, not metadata.
 - Under 100 clicks in 28 days: say "too little data to conclude". Never invent a trend. Search Console needs a custom domain and one click by the owner (`$K search-console connect $SITE` prints the consent link); say this on day one, not in week two.
 
@@ -151,13 +158,15 @@ into the report and wait for the owner's yes. Then: backup, `files write` the ne
 
 ## 7. Schedule it, then the weekly report
 
+`node $SKILL_DIR/scripts/seo-schedule.mjs <claude|codex|grok|openclaw|hermes> [--launchd]` prints the right line for THIS machine: absolute paths and PATH (cron starts with an almost empty one, so a bare `claude` or `npx` fails silently), the key in a mode-600 env file instead of the crontab, the report written to a dated file. It prints and installs nothing.
+
 | Your agent | The one line | Details |
 |---|---|---|
-| Claude Code | `claude -p "Use the kleap-seo-autopilot skill: run its autopilot for the sites in ~/.kleap-seo/sites.txt, then report." --allowedTools Bash` in cron / launchd | `prompts/claude.md` |
-| Codex | scheduled task with the same sentence (skill in `~/.agents/skills`) | `prompts/chatgpt-scheduled-task.md` |
-| Grok Build | `grok -p "<same sentence>" --always-approve --max-turns 40` | `prompts/grok-bot.md` |
-| OpenClaw / Hermes | `cron add` with the prompt in the file | `prompts/openclaw-hermes.md` |
-| ChatGPT / Claude.ai | scheduled task or routine on the MCP connector | `prompts/chatgpt-scheduled-task.md`, `prompts/claude.md` |
+| Claude Code | `node scripts/seo-schedule.mjs claude` (cron) or `... claude --launchd` (Mac) | `prompts/claude.md` |
+| Codex | `node scripts/seo-schedule.mjs codex`, or a scheduled task with the same sentence (skill in `~/.agents/skills`) | `prompts/chatgpt-scheduled-task.md` |
+| Grok Build | `node scripts/seo-schedule.mjs grok` (one run takes minutes: allow for it) | `prompts/grok-bot.md` |
+| OpenClaw / Hermes | `node scripts/seo-schedule.mjs openclaw` (its own scheduler, report announced to your chat) | `prompts/openclaw-hermes.md` |
+| ChatGPT / Claude.ai (no shell) | scheduled task or routine on the MCP connector | `prompts/chatgpt-scheduled-task.md`, `prompts/claude.md` |
 
 **Mondays (or when asked), the weekly report:**
 ```bash
