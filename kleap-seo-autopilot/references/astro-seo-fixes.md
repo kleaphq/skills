@@ -6,7 +6,7 @@ the `<title>`, meta description, canonical, `robots`, Open Graph and a JSON-LD g
 You change SEO by changing the props a page passes to `<Base>` and the content inside it.
 Do not edit `Base.astro`, `astro.config.mjs`, `package.json`, `public/robots.txt` (Kleap owns them).
 
-How to edit (all deterministic, cost 0 credits): `kleap files cat <site> <path>` first, copy the exact old text,
+How to edit (deterministic file edits, no Kleap AI involved): `kleap files cat <site> <path>` first, copy the exact old text,
 then `kleap files edit <site> <path> --find "<old>" --replace "<new>"` (`--find` must match once; add surrounding
 text to make it unique, or `--all` when you really mean every occurrence). `kleap publish <site>` makes it live.
 MCP equivalent: `read_files` -> `edit_files` (several edits in one validated call) -> `publish_app`.
@@ -72,10 +72,14 @@ top page with the most impressions, check that its content really answers the qu
 description around the query's wording and intent (put the query's key words first, add a concrete benefit).
 Do not change the URL. Judge the effect after 2-4 weeks, not the next day (Google data lags 2-3 days).
 If the site has fewer than 100 clicks in 28 days, say so: it is too little data to conclude anything.
+**Verification is different for this type:** the `gsc_low_ctr` finding comes from Google's data, so it stays in the audit until Google re-crawls
+(weeks). Do NOT undo the fix because the finding is still there. Verify instead that the served `<title>` and meta description equal what you wrote
+(`seo-audit.mjs <site> --live` shows them; the audit marks the pair as WAITING for 28 days). Record `gsc_before` (the page's row in `gsc.top_pages`) in the log.
 
 ## live_title_differs / live_not_200
-`live_title_differs` right after an edit means you have not published yet (or the deploy is still going):
-publish, wait ~30 s, run the audit with `--live` again. `live_not_200` on a page: publish again, then
+`live_title_differs` right after your own edit means you have not published yet (or the deploy is still going):
+publish, wait ~30 s, run the audit with `--live` again. If you did NOT edit that page and the live page differs from the source, the owner has
+unpublished edits: do not publish, tell the owner (see `seo-log.mjs drift`). `live_not_200` on a page: publish again, then
 `kleap status <site>`; if it persists, revert your last change and report it.
 
 ## Manual audit (agents without a shell: ChatGPT, Claude.ai, Grok API)

@@ -1,28 +1,31 @@
 # Kleap SEO autopilot on OpenClaw and Hermes Agent
 
-Both agents have a shell, load Agent Skills (`SKILL.md`) and have a built-in scheduler, so they use the skill + CLI route
-(no MCP needed). The skill keeps its own log, so a scheduled run needs no memory.
+Both agents have a shell, load Agent Skills (`SKILL.md`) and have a built-in scheduler, so they use the skill + CLI route (no MCP needed).
+The skill keeps its memory in the site itself (`.kleap/seo-autopilot.json`), so a scheduled run on a fresh container still knows what happened before.
 
 ## OpenClaw  (commands checked against OpenClaw 2026.4.15 `--help` and docs.openclaw.ai)
 
 ```bash
-# 1. install the skill. OpenClaw 2026.4.15 (what we have) installs ClawHub slugs only: `skills install ./folder` answers
-#    "Invalid skill slug" (the docs describe ./path and git: installs for newer builds). So copy the folder (copy-in not run by us):
-mkdir -p ~/.openclaw/skills && cp -R kleap-seo-autopilot ~/.openclaw/skills/      # shared by all local agents; or <workspace>/skills/
-#    after publication on ClawHub:  openclaw skills install @kleap/kleap-seo-autopilot   (ClawHub org handle is `kleap`, same as the existing `kleap` skill)
-openclaw skills list --eligible                            # kleap-seo-autopilot must appear (needs node + npx)
+# 1. install the skill
+openclaw skills install kleap-seo-autopilot                 # the ClawHub slug; works once the listing is published (it is not yet)
+#    OpenClaw 2026.4.15 installs ClawHub slugs only (`skills install ./folder` answers "Invalid skill slug"), so until then copy the folder:
+mkdir -p ~/.openclaw/skills && cp -R kleap-seo-autopilot ~/.openclaw/skills/        # shared by all local agents; or <workspace>/skills/
+openclaw skills list --eligible                             # kleap-seo-autopilot must appear (needs node + npx)
 
-# 2. the key. Full-preset key from https://kleap.co/settings/api-key. In ~/.openclaw/openclaw.json:
+# 2. connect Kleap. Attended: npx -y kleap-cli@2.1.0 auth login (browser, nothing to paste).
+#    Unattended: a Full-preset key from https://kleap.co/settings/api-key, in ~/.openclaw/openclaw.json:
 #    skills: { entries: { "kleap-seo-autopilot": { apiKey: "kleap_live_sk_..." } } }     (primaryEnv = KLEAP_API_KEY)
-#    or export KLEAP_API_KEY in the gateway's environment. Attended alternative: npx -y kleap-cli@latest auth login
+#    or export KLEAP_API_KEY in the gateway's environment. Then check everything:
+node ~/.openclaw/skills/kleap-seo-autopilot/scripts/seo-doctor.mjs my-site.kleap.io     # ✓/✗ checklist + the ONE next step
 
-# 3. the sites
-mkdir -p ~/.kleap-seo && printf '%s\n' mysite.ch rivera-family-plumbing.kleap.io > ~/.kleap-seo/sites.txt
+# 3. first run by hand, so you approve the first changes
+#    tell your agent:  "Use the kleap-seo-autopilot skill on my-site.kleap.io."   -> it shows the plan, you say yes, then "autopilot"
 
-# 4. schedule it every day at 07:07 (isolated session, summary sent to your chat)
+# 4. the sites, then schedule it every day at 07:07 (isolated session, summary sent to your chat)
+mkdir -p ~/.kleap-seo && printf '%s\n' my-site.kleap.io rivera-family-plumbing.kleap.io > ~/.kleap-seo/sites.txt
 openclaw cron add --name "Kleap SEO autopilot" --cron "7 7 * * *" --tz Europe/Paris --session isolated --announce \
   --timeout-seconds 1800 \
-  --message "Use the kleap-seo-autopilot skill: run its daily loop once for the sites in ~/.kleap-seo/sites.txt, then give me the owner report. On Mondays also give the weekly summary."
+  --message "Use the kleap-seo-autopilot skill: run its autopilot for the sites in ~/.kleap-seo/sites.txt, then give me the owner report. On Mondays also give the weekly report and one growth idea."
 openclaw cron run <job-id>        # run it once now to check (debug)
 ```
 In newer OpenClaw versions `cron` is an alias of `openclaw automations create "<cron>" "<message>" ...`.
@@ -34,12 +37,13 @@ In newer OpenClaw versions `cron` is an alias of `openclaw automations create "<
 # 1. skill: Hermes loads Agent Skills from $HERMES_HOME/skills (default ~/.hermes/skills)
 mkdir -p ~/.hermes/skills && cp -R kleap-seo-autopilot ~/.hermes/skills/
 
-# 2. the key goes in ~/.hermes/.env (secrets only, never config.yaml)
+# 2. the key goes in ~/.hermes/.env (secrets only, never config.yaml); check with the doctor
 echo 'KLEAP_API_KEY=kleap_live_sk_...' >> ~/.hermes/.env
-mkdir -p ~/.kleap-seo && printf '%s\n' mysite.ch rivera-family-plumbing.kleap.io > ~/.kleap-seo/sites.txt
+node ~/.hermes/skills/kleap-seo-autopilot/scripts/seo-doctor.mjs my-site.kleap.io
+mkdir -p ~/.kleap-seo && printf '%s\n' my-site.kleap.io rivera-family-plumbing.kleap.io > ~/.kleap-seo/sites.txt
 
-# 3. schedule it (skill-backed cron job)
-hermes cron create "7 7 * * *" "Run the daily loop of the kleap-seo-autopilot skill for the sites in ~/.kleap-seo/sites.txt, then give me the owner report. On Mondays also give the weekly summary." \
+# 3. first run by hand ("Use the kleap-seo-autopilot skill on my-site.kleap.io", approve, say "autopilot"), then schedule it (skill-backed cron job)
+hermes cron create "7 7 * * *" "Run the autopilot of the kleap-seo-autopilot skill for the sites in ~/.kleap-seo/sites.txt, then give me the owner report. On Mondays also give the weekly report and one growth idea." \
   --skill kleap-seo-autopilot --name "Kleap SEO autopilot"
 ```
 Optional MCP route instead of the CLI (Hermes MCP client, `~/.hermes/config.yaml`; the docs say `${VAR}` placeholders in `headers` are resolved from `~/.hermes/.env`):
@@ -50,10 +54,9 @@ mcp_servers:
     headers:
       Authorization: "Bearer ${KLEAP_API_KEY}"
 ```
-With the MCP route the agent follows the loop in `SKILL.md` using the tool names in its table (`find_app`, `read_files`, `edit_files`,
-`publish_app`, `get_search_console`) and the manual audit checklist in `references/astro-seo-fixes.md`.
+With the MCP route the agent has no scripts: use the prompt in `chatgpt-scheduled-task.md` (Step 1), it carries the whole loop and the list of forbidden tools.
 
 ## What a good run looks like
 
-One message per run: per site the live URL, each change as `page: before -> after`, what was skipped (and why), what needs you
-(for example "Search Console not connected"), and on Mondays a short weekly summary from `seo-log.mjs weekly`.
+One message per run: per site the live URL, the checklist score before -> after, each change as `page: before -> after`, what was skipped (and why), what needs you
+(for example "Search Console not connected, it needs a custom domain"), what it will look at next, and on Mondays the weekly report plus one growth idea for you to approve.

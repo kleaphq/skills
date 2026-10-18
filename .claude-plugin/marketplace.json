@@ -11,36 +11,12 @@
       "description": "Build, edit, publish and SEO-optimize real hosted websites via the Kleap MCP server (verified-live), read their leads, traffic and database, and buy or connect domains.",
       "version": "0.3.0",
       "skills": [
-        {
-          "name": "build",
-          "path": "kleap-build",
-          "invoke": "/kleap:build"
-        },
-        {
-          "name": "edit",
-          "path": "kleap-edit",
-          "invoke": "/kleap:edit"
-        },
-        {
-          "name": "publish",
-          "path": "kleap-publish",
-          "invoke": "/kleap:publish"
-        },
-        {
-          "name": "multilingual",
-          "path": "kleap-multilingual",
-          "invoke": "/kleap:multilingual"
-        },
-        {
-          "name": "data",
-          "path": "kleap-data",
-          "invoke": "/kleap:data"
-        },
-        {
-          "name": "seo-autopilot",
-          "path": "kleap-seo-autopilot",
-          "invoke": "/kleap:seo-autopilot"
-        }
+        "./kleap-build",
+        "./kleap-edit",
+        "./kleap-publish",
+        "./kleap-multilingual",
+        "./kleap-data",
+        "./kleap-seo-autopilot"
       ]
     }
   ]

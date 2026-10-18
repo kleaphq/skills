@@ -1,0 +1,19 @@
+Two machines, one site, real Kleap API (test site 116838), 2026-10-18. Machine 1 refers to the site by id, machine 2 by slug.
+Proves: one history per site (ids are canonicalized), memory travels inside the site, a pause set on one machine stops the other.
+
+--- M1 (id) first run
+no memory in the site yet (.kleap/seo-autopilot.json): first run on this site
+logged 116838: 1 fix(es)
+{"site":"116838","mode":"auto","since":"2026-10-18T17:34:03.696Z"}
+memory saved to .kleap/seo-autopilot.json (1 run(s), 0 measurement(s))
+--- M2 (slug) second machine
+memory pulled: 1 run(s), 0 measurement(s) added; mode auto
+{'site': '116838', 'first_run': False, 'mode': 'auto', 'touched_last_14d': ['/|title_short']}
+logged 116838: 1 fix(es)
+memory saved to .kleap/seo-autopilot.json (2 run(s), 0 measurement(s))
+--- M1 pauses
+{"site":"116838","mode":"pause","since":"2026-10-18T17:34:20.874Z"}
+--- M2 pulls: pause must win
+memory pulled: 0 run(s), 0 measurement(s) added; mode pause
+{'mode': 'pause', 'paused': True, 'remaining_today': 0, 'touched_last_14d': ['/|title_short', '/|missing_alt']}
+--- M1 pull sees both runs (2 entries in its log)

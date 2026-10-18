@@ -1,0 +1,15 @@
+ok   first run is detected
+ok   fixes are on cool-down for 14 days
+ok   daily budget counts today's fixes
+ok   nothing is due before 14 days
+ok   fixes become due after 14 days
+ok   kept + improved is recognised
+ok   an owner override is recognised and not counted against us
+ok   two improvements and no loss -> double down
+ok   an overridden fix is not counted as good or bad
+ok   the owner's wording becomes the style guide
+ok   under 100 impressions = too little data
+ok   pause means zero fixes left today
+ok   weekly report runs
+
+all checks passed (synthetic data: this tests the mechanics, not SEO results)

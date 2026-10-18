@@ -1,29 +1,42 @@
 #!/usr/bin/env node
-// kleap-seo-autopilot / seo-audit.mjs — deterministic SEO audit of ONE Kleap (Astro) site.
+// kleap-seo-autopilot / seo-audit.mjs — deterministic, read-only SEO audit.
 //
-//   node seo-audit.mjs <app> [--json] [--live] [--no-gsc] [--max-pages 60]
+//   node seo-audit.mjs <app> [--json] [--live] [--no-gsc] [--max-pages 60] [--no-skip]     a Kleap (Astro) site, from its source files
+//   node seo-audit.mjs --url https://example.com [--json] [--max-pages 12]                  ANY public site, no account, no Kleap CLI
 //
 // <app> = app id, slug, slug.kleap.io URL or connected custom domain (anything the kleap CLI accepts).
-// Read-only: it only calls `kleap files ls`, `kleap files cat`, `kleap status`, `kleap search-console`
-// (and, with --live, plain GET requests on the site's own public pages). It never writes or publishes.
+// Kleap mode calls only `kleap status`, `kleap files ls|cat`, `kleap search-console` (and, with --live, plain GET requests on the site's own
+// public pages). External mode only does plain GET/HEAD requests on the public site. Neither mode writes or publishes anything.
 //
-// Auth is whatever the kleap CLI already has: `kleap auth login` token or KLEAP_API_KEY.
-// Zero dependencies, Node >= 18.
+// Output: a checklist score (our own, 0-100, NOT a Google metric), TOP 3 fixes (skipping what was fixed recently or reverted: it reads
+// $KLEAP_SEO_HOME/log.jsonl unless --no-skip), growth ideas for when the basics are clean, Search Console state.
+// Auth for Kleap mode is whatever the CLI already has (`kleap auth login` token or KLEAP_API_KEY). Zero dependencies, Node >= 18.
+import dns from "node:dns";
+dns.setDefaultResultOrder("ipv4first"); // some networks resolve an IPv6 address they cannot route: the free URL audit must not fail on the first command because of that
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const args = process.argv.slice(2);
 const flag = (n) => args.includes(n);
 const opt = (n, d) => (args.includes(n) ? args[args.indexOf(n) + 1] : d);
-const positional = args.filter((a, i) => !a.startsWith("--") && !(i > 0 && ["--max-pages"].includes(args[i - 1])));
+const VALUE_OPTS = ["--max-pages", "--url"];
+const positional = args.filter((a, i) => !a.startsWith("--") && !(i > 0 && VALUE_OPTS.includes(args[i - 1])));
 const APP = positional[0];
-if (!APP) {
-  console.error("usage: node seo-audit.mjs <app> [--json] [--live] [--no-gsc] [--max-pages 60]");
+const EXTERNAL_URL = opt("--url", null);
+if (!APP && !EXTERNAL_URL) {
+  console.error("usage: node seo-audit.mjs <app> [--json] [--live] [--no-gsc] [--no-skip]   |   node seo-audit.mjs --url https://example.com [--json] [--max-pages 12]");
   process.exit(2);
 }
 const AS_JSON = flag("--json");
-const MAX_PAGES = Number(opt("--max-pages", 60));
+const MAX_PAGES = Number(opt("--max-pages", EXTERNAL_URL ? 12 : 60));
 
 // ── thresholds (tuned for small-business sites; change here, nowhere else) ──────────────────
+// Google truncates by pixel width, not characters: CJK/full-width characters are about twice as wide, so they count double (a 28-char Japanese title is NOT too short)
+const wlen = (s) => [...String(s)].reduce((n, c) => n + (/[\u1100-\u11ff\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]/.test(c) ? 2 : 1), 0);
+// 404/410/5xx = the page is gone or broken. 401/403/429/999 or no answer = the site refuses OUR bot (rate limit, WAF): that is not a dead page, so it is never reported as one
+const isGone = (st) => st === 404 || st === 410 || (st >= 500 && st <= 599);
 const T = {
   titleMin: 30, titleMax: 60,
   descMin: 70, descMax: 160,
@@ -32,9 +45,11 @@ const T = {
 };
 
 // ── kleap CLI wrapper (retries once: `fetch failed` is a transient network error) ───────────
-const BIN = (process.env.KLEAP_BIN || "npx -y kleap-cli@latest").split(" ");
+// Pinned on purpose: a skill must not run an unreviewed new CLI version. Bump together with the skill.
+const BIN = (process.env.KLEAP_BIN || "npx -y kleap-cli@2.1.0").split(" ");
 function kleap(cliArgs, { json = true } = {}) {
   const full = [...BIN.slice(1), ...cliArgs, ...(json ? ["--json"] : [])];
+  let last;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const out = execFileSync(BIN[0], full, {
@@ -44,13 +59,238 @@ function kleap(cliArgs, { json = true } = {}) {
       });
       return json ? JSON.parse(out) : out;
     } catch (e) {
-      const msg = String(e.stderr || e.stdout || e.message).slice(0, 300);
-      if (attempt === 2) throw new Error(`kleap ${cliArgs.slice(0, 3).join(" ")} failed: ${msg}`);
+      last = String(e.stderr || e.stdout || e.message).slice(0, 400);
+      if (/INSUFFICIENT_SCOPE|"code":"(UNAUTHORIZED|INVALID_API_KEY)"|HTTP 40[13]/.test(last)) break; // not transient
     }
+  }
+  const err = new Error(`kleap ${cliArgs.slice(0, 3).join(" ")} failed: ${last}`);
+  err.auth = /INSUFFICIENT_SCOPE|UNAUTHORIZED|INVALID_API_KEY|HTTP 40[13]/.test(last);
+  throw err;
+}
+
+// ── shared helpers ──────────────────────────────────────────────────────────────────────────
+const decode = (s) => String(s).replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&nbsp;/g, " ").replace(/&#x27;/g, "'");
+const words = (t) => (t ? t.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length : 0);
+const SEO_HOME = process.env.KLEAP_SEO_HOME || path.join(os.homedir(), ".kleap-seo");
+const findings = [];
+const add = (page, type, impact, detail, fix) => findings.push({ page, type, impact, detail, fix });
+// the 10 checks that make the checklist score: finding type -> check name
+const CHECK_OF = {
+  missing_title: "title", title_short: "title", title_long: "title", missing_description: "description", description_short: "description", description_long: "description",
+  duplicate_title: "unique_title", duplicate_description: "unique_description", no_h1: "h1", multiple_h1: "h1", missing_alt: "alt", dead_internal_link: "links",
+  no_page_schema: "schema", thin_page: "content", orphan_page: "linked", no_layout: "title", missing_canonical: "canonical", missing_viewport: "viewport", missing_lang: "lang",
+  noindex: "indexable", live_not_200: "status", missing_og_image: "social",
+};
+
+/** What was fixed recently / reverted, from the autopilot log: those (page,type) pairs must not come back as "TOP 3" on the next run. */
+function blockedPairs(siteId) {
+  const blocked = new Map();
+  try {
+    const f = path.join(SEO_HOME, "log.jsonl");
+    if (!fs.existsSync(f) || flag("--no-skip") || !siteId) return blocked;
+    const now = process.env.KLEAP_SEO_TODAY ? new Date(process.env.KLEAP_SEO_TODAY + "T12:00:00Z").getTime() : Date.now();
+    for (const l of fs.readFileSync(f, "utf8").split("\n").filter(Boolean)) {
+      let e; try { e = JSON.parse(l); } catch { continue; }
+      if (String(e.site) !== String(siteId)) continue;
+      const age = (now - Date.parse(e.ts)) / 864e5;
+      for (const x of e.fixes || []) {
+        const k = `${x.page}|${x.type}`;
+        if (e.reverted && age <= 30) blocked.set(k, "reverted in the last 30 days: ask the owner before trying again");
+        else if (!e.reverted && x.type === "gsc_low_ctr" && age <= 28) blocked.set(k, "rewritten, waiting for Google to re-crawl (judge in 2-4 weeks)");
+        else if (!e.reverted && age <= 14 && !blocked.has(k)) blocked.set(k, `we fixed this on ${String(e.ts).slice(0, 10)} and the problem is present again: the page was changed after our fix. Tell the owner, do not overwrite their change on your own for 14 days`);
+      }
+    }
+  } catch {}
+  return blocked;
+}
+
+function scoreOf(pageRoutes, extraChecks = 0) {
+  const perPage = (r) => (r === "/" ? 8 : 10);
+  const total = pageRoutes.reduce((n, r) => n + perPage(r), 0) + extraChecks;
+  const failed = new Set();
+  for (const f of findings) {
+    const c = CHECK_OF[f.type];
+    if (!c) continue;
+    for (const pg of String(f.page).split(" + ")) failed.add(`${pg}|${c}`);
+  }
+  const passed = Math.max(0, total - failed.size);
+  return { passed, total, percent: total ? Math.round((100 * passed) / total) : 100, note: "Kleap autopilot checklist, not a Google metric" };
+}
+
+function pickTop3(blocked) {
+  const sorted = [...findings].sort((a, b) => b.impact - a.impact);
+  const seen = new Set(), top3 = [], waiting = [];
+  for (const f of sorted) {
+    const k = f.page + "|" + f.type;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    if (blocked.has(k)) { waiting.push({ ...f, reason: blocked.get(k) }); continue; }
+    if (top3.length < 3) top3.push(f);
+  }
+  return { top3, waiting };
+}
+
+function render(report, { external }) {
+  const { top3, findings: all, waiting, score, gsc, growth } = report;
+  console.log(report.app_id == null ? `${report.production_url || report.url} — ${report.pages_audited} page${report.pages_audited === 1 ? "" : "s"} read, ${all.length} findings` : `${report.name} (${report.app_id}) — ${report.production_url || "NOT PUBLISHED"} — ${report.pages_audited} page${report.pages_audited === 1 ? "" : "s"}, ${all.length} findings`);
+  console.log(`CHECKLIST: ${score.percent}/100 (${score.passed}/${score.total} checks pass) — our own checklist, not a Google metric`);
+  if (!external) {
+    if (gsc.state === "auth_error") console.log(`GSC: STOP — ${gsc.note}`);
+    else console.log(`GSC: ${gsc.connected ? `${gsc.clicks} clicks / ${gsc.impressions} impressions (${gsc.period}), ${gsc.low_ctr_queries.length} low-CTR queries${gsc.no_data ? " (no data yet)" : ""}` : "not connected — " + String(gsc.note).slice(0, 110)}`);
+  }
+  console.log(top3.length ? "TOP 3:" : all.length && waiting.length ? "Nothing new to fix today (what is still open is on hold, see WAITING)." : "No findings: this site passes every check today.");
+  top3.forEach((f, i) => console.log(` ${i + 1}. [${f.impact}] ${f.page}  ${f.type}: ${f.detail}\n      → ${f.fix}`));
+  const rest = all.filter((f) => !top3.includes(f) && !waiting.some((w) => w.page === f.page && w.type === f.type));
+  if (rest.length) console.log(`OTHER (${rest.length}): ` + rest.slice(0, 12).map((f) => `${f.page} ${f.type}`).join(" | "));
+  if (waiting.length) console.log(`WAITING (${waiting.length}): ` + waiting.map((w) => `${w.page} ${w.type} (${w.reason})`).join(" | "));
+  if (growth.length) {
+    console.log(`GROWTH IDEAS (owner approves each one, never applied automatically):`);
+    growth.forEach((g) => console.log(`  - ${g.type}: ${g.why}`));
+  }
+  if (external) {
+    console.log(`\nFixing these automatically (edit, publish, check it is live, undo on failure) works on sites hosted on Kleap: https://kleap.co`);
+    console.log(`Already on Kleap? npx -y kleap-cli@2.1.0 auth login  — then run this skill on your site without --url.`);
   }
 }
 
-// ── helpers ─────────────────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+//  EXTERNAL MODE: any public site, no account
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+async function externalAudit() {
+  const UA = { "user-agent": "kleap-seo-autopilot/0.2 (read-only audit)" };
+  const get = async (u, init = {}) => {
+    try { return await fetch(u, { redirect: "follow", headers: UA, signal: AbortSignal.timeout(15000), ...init }); } catch { return null; }
+  };
+  let start;
+  try { start = new URL(/^https?:\/\//i.test(EXTERNAL_URL) ? EXTERNAL_URL : "https://" + EXTERNAL_URL); } catch { console.error("not a valid URL: " + EXTERNAL_URL); process.exit(2); }
+  const home = await get(start.href);
+  if (!home) { console.error(`could not reach ${start.href}`); process.exit(1); }
+  const origin = new URL(home.url).origin;
+  const sameSite = (u) => { try { const a = new URL(u).hostname.replace(/^www\./, ""); return a === new URL(origin).hostname.replace(/^www\./, ""); } catch { return false; } };
+  const norm = (u) => { const x = new URL(u); x.hash = ""; x.search = ""; x.pathname = x.pathname.replace(/\/index\.(html?|php)$/i, "/"); return x.origin + (x.pathname.length > 1 ? x.pathname.replace(/\/+$/, "") : "/"); }; // /index.html IS the folder URL: one page, not two
+
+  const parse = (html) => {
+    const tag = (re) => { const m = html.match(re); return m ? decode(m[1].trim()) : null; };
+    const metas = [...html.matchAll(/<meta\b[^>]*>/gi)].map((m) => m[0]);
+    const meta = (key, val) => { for (const m of metas) { const k = (m.match(new RegExp(`\\b${key}\\s*=\\s*["']([^"']*)["']`, "i")) || [])[1]; if (k && k.toLowerCase() === val) { const c = (m.match(/\bcontent\s*=\s*"([^"]*)"|\bcontent\s*=\s*'([^']*)'/i) || []); return decode((c[1] ?? c[2] ?? "").trim()); } } return null; };
+    const imgs = [...html.matchAll(/<img\b[^>]*>/gi)].map((m) => m[0]);
+    const body = html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<!--[\s\S]*?-->/g, " ");
+    const links = [...html.matchAll(/<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)].map((m) => (m[1] ?? m[2]).trim());
+    return {
+      title: tag(/<title[^>]*>([\s\S]*?)<\/title>/i), description: meta("name", "description"),
+      canonical: (html.match(/<link\b[^>]*rel\s*=\s*["']canonical["'][^>]*href\s*=\s*["']([^"']+)["']/i) || [])[1] || null,
+      lang: (html.match(/<html\b[^>]*\blang\s*=\s*["']([^"']+)["']/i) || [])[1] || null,
+      viewport: meta("name", "viewport"), robots: meta("name", "robots"), ogImage: meta("property", "og:image"),
+      h1: (html.match(/<h1\b/gi) || []).length, imgs: imgs.length, imgsMissingAlt: imgs.filter((t) => !/\balt\s*=/i.test(t)).length,
+      jsonld: (html.match(/<script[^>]+application\/ld\+json/gi) || []).length,
+      words: words(decode(body.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim()), links,
+      text: decode(body.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").toLowerCase(),
+    };
+  };
+
+  // seed: homepage links + sitemap
+  const pages = new Map(); // url -> {status, ...parsed}
+  const homeUrl = norm(home.url);
+  const queue = [homeUrl];
+  const sm = await get(origin + "/sitemap.xml") ?? null;
+  let sitemapOk = !!sm && sm.status === 200;
+  let smText = sitemapOk ? await sm.text() : "";
+  if (!sitemapOk) { const si = await get(origin + "/sitemap-index.xml"); if (si && si.status === 200) { sitemapOk = true; smText = await si.text(); } }
+  const locs = [...smText.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map((m) => m[1]);
+  const subMaps = locs.filter((l) => /\.xml$/i.test(l)).slice(0, 2);
+  for (const sub of subMaps) { const r = await get(sub); if (r && r.status === 200) locs.push(...[...(await r.text()).matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map((m) => m[1])); }
+  for (const l of locs.filter((l) => !/\.xml$/i.test(l) && sameSite(l))) { try { queue.push(norm(l)); } catch {} }
+
+  const seenQ = new Set();
+  const status = new Map();
+  while (queue.length && pages.size < MAX_PAGES) {
+    const u = queue.shift();
+    if (seenQ.has(u)) continue;
+    seenQ.add(u);
+    const r = await get(u);
+    if (!r) { status.set(u, 0); continue; }
+    status.set(u, r.status);
+    const ct = r.headers.get("content-type") || "";
+    if (r.status >= 400 || !/html/i.test(ct)) { if (r.status >= 400) pages.set(u, { status: r.status }); continue; }
+    const p = parse(await r.text());
+    pages.set(u, { status: r.status, ...p });
+    for (const h of p.links) {
+      if (/^(mailto:|tel:|javascript:|#)/i.test(h)) continue;
+      let abs; try { abs = new URL(h, u).href; } catch { continue; }
+      if (!sameSite(abs)) continue;
+      if (/\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|css|js|ico|xml|txt|mp4|woff2?)$/i.test(new URL(abs).pathname)) continue;
+      const n = norm(abs);
+      if (!seenQ.has(n) && !queue.includes(n)) queue.push(n);
+    }
+  }
+  const okPages = [...pages.entries()].filter(([, p]) => p.status < 400 && p.title !== undefined);
+  const route = (u) => { const x = new URL(u); return x.pathname.length > 1 ? x.pathname : "/"; };
+
+  const titleCount = {}, descCount = {};
+  for (const [, p] of okPages) { if (p.title) titleCount[p.title.toLowerCase()] = (titleCount[p.title.toLowerCase()] || 0) + 1; if (p.description) descCount[p.description.toLowerCase()] = (descCount[p.description.toLowerCase()] || 0) + 1; }
+  const dupReported = new Set();
+  for (const [u, p] of okPages) {
+    const r = route(u);
+    if (/noindex/i.test(p.robots || "")) { add(r, "noindex", 9, "page carries a noindex robots tag (Google will not list it)", "remove noindex if the page should rank"); continue; }
+    if (!p.title) add(r, "missing_title", 10, "no <title>", "add a unique, keyword-led title (30-60 chars)");
+    else {
+      if (wlen(p.title) < T.titleMin) add(r, "title_short", 5, `title is ${wlen(p.title)} chars: "${p.title}"`, `rewrite to ${T.titleMin}-${T.titleMax} chars with the main keyword + business/location`);
+      if (wlen(p.title) > T.titleMax) add(r, "title_long", 4, `title is ${wlen(p.title)} chars and will be truncated: "${p.title}"`, `shorten to <= ${T.titleMax} chars, keyword first`);
+      const k = p.title.toLowerCase();
+      if (titleCount[k] > 1 && !dupReported.has("t" + k)) { dupReported.add("t" + k); add(okPages.filter(([, q]) => q.title?.toLowerCase() === k).map(([x]) => route(x)).join(" + "), "duplicate_title", 8, `same title on ${titleCount[k]} pages: "${p.title}"`, "give each page its own title"); }
+    }
+    if (!p.description) add(r, "missing_description", 10, "no meta description (Google will invent a snippet)", "write a 70-160 char description that sells the click");
+    else {
+      if (wlen(p.description) < T.descMin) add(r, "description_short", 5, `description is ${wlen(p.description)} chars`, `expand to ${T.descMin}-${T.descMax} chars`);
+      if (wlen(p.description) > T.descMax) add(r, "description_long", 3, `description is ${wlen(p.description)} chars and will be cut`, `trim to <= ${T.descMax}`);
+      const k = p.description.toLowerCase();
+      if (descCount[k] > 1 && !dupReported.has("d" + k)) { dupReported.add("d" + k); add(okPages.filter(([, q]) => q.description?.toLowerCase() === k).map(([x]) => route(x)).join(" + "), "duplicate_description", 7, `same description on ${descCount[k]} pages`, "give each page its own description"); }
+    }
+    if (p.h1 === 0) add(r, "no_h1", 6, "no <h1>", "add one <h1> with the main keyword");
+    if (p.h1 > 1) add(r, "multiple_h1", 3, `${p.h1} <h1> elements`, "keep one <h1>");
+    if (p.imgsMissingAlt > 0) add(r, "missing_alt", Math.min(8, 3 + p.imgsMissingAlt), `${p.imgsMissingAlt} of ${p.imgs} images have no alt attribute`, "add descriptive alt text");
+    if (!p.canonical) add(r, "missing_canonical", 5, "no canonical link", "add <link rel=canonical> pointing to this page's preferred URL");
+    if (!p.viewport) add(r, "missing_viewport", 6, "no viewport meta (bad on phones, Google indexes mobile first)", "add <meta name=viewport content=\"width=device-width, initial-scale=1\">");
+    if (!p.lang) add(r, "missing_lang", 3, "<html> has no lang attribute", "add lang=\"xx\"");
+    if (!p.ogImage && r === "/") add(r, "missing_og_image", 3, "no og:image (links shared on social have no preview)", "add an og:image");
+    if (r === "/" && p.jsonld === 0) add(r, "no_page_schema", 4, "homepage has no JSON-LD structured data", "add Organization / LocalBusiness JSON-LD from facts the page shows");
+    else if (r !== "/" && p.jsonld === 0) add(r, "no_page_schema", 2, "no JSON-LD on this page", "add the node that matches the page");
+    if (r !== "/" && p.words < T.thinWords) add(r, "thin_page", 5, `about ${p.words} words of visible text`, "expand with useful, specific content");
+  }
+  // dead internal links: targets that answered >= 400 inside the crawl, plus a sample outside it
+  const linkedFrom = new Map();
+  for (const [u, p] of okPages) for (const h of p.links || []) { try { const abs = new URL(h, u).href; if (sameSite(abs) && !/\.[a-z0-9]{2,5}$/i.test(new URL(abs).pathname)) { const n = norm(abs); if (!linkedFrom.has(n)) linkedFrom.set(n, route(u)); } } catch {} }
+  // a page that 404s AND is linked from another page is ONE problem (the dead link, reported below), not two: only report it alone when nothing on the site links to it (e.g. a sitemap entry)
+  for (const [u, p] of pages) if (isGone(p.status) && !linkedFrom.has(norm(u))) add(route(u), "live_not_200", 10, `answers ${p.status}`, "fix or redirect the page");
+  let probes = 0;
+  for (const [n, from] of linkedFrom) {
+    let st = status.get(n);
+    if (st === undefined && probes < 25) { probes++; const r = await get(n, { method: "HEAD" }); st = r ? r.status : 0; }
+    if (isGone(st)) add(from, "dead_internal_link", 7, `links to ${route(n)}, which answers ${st}`, "point it to an existing page or create the page");
+  }
+  const rb = await get(origin + "/robots.txt");
+  if (!rb || rb.status !== 200) add("/robots.txt", "live_not_200", 3, "no robots.txt", "add one that allows crawling and points to the sitemap");
+  if (!sitemapOk) add("/sitemap.xml", "live_not_200", 4, "no sitemap.xml or sitemap-index.xml", "publish a sitemap so Google finds every page");
+
+  const routes = okPages.map(([u]) => route(u));
+  const score = scoreOf(routes.length ? routes : ["/"]);
+  const { top3, waiting } = pickTop3(new Map());
+  const growth = [];
+  if (okPages.length <= 2) growth.push({ type: "single_page_site", why: "a one-page site competes for one keyword set; dedicated pages for each service, product or room rank for far more searches" });
+  if (!okPages.some(([, p]) => /faq|frequently asked|\?/.test((p.text || "").slice(0, 20000)) && p.jsonld > 0)) growth.push({ type: "no_faq", why: "no FAQ section with structured data: questions customers really ask can earn rich results" });
+  const report = {
+    mode: "external", url: origin, app_id: null, name: new URL(origin).hostname, production_url: origin, published: true,
+    pages_audited: okPages.length, finding_count: findings.length, top3, findings: findings.sort((a, b) => b.impact - a.impact), waiting, score, growth, gsc: { connected: false, note: "external mode" }, live: [],
+    next_step: "Automatic fixing works on sites hosted on Kleap (https://kleap.co).",
+  };
+  if (AS_JSON) console.log(JSON.stringify(report, null, 2)); else render(report, { external: true });
+}
+
+if (EXTERNAL_URL) { await externalAudit(); process.exit(0); }
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+//  KLEAP MODE: a Kleap (Astro) site, from its source files
+// ═══════════════════════════════════════════════════════════════════════════════════════════
 const stripFrontmatter = (s) => s.replace(/^---[\s\S]*?\n---\s*\n?/, "");
 const frontmatter = (s) => (s.match(/^---([\s\S]*?)\n---/) || [, ""])[1];
 
@@ -91,7 +331,6 @@ function layoutAttrs(src) {
   return attrs;
 }
 
-const decode = (s) => s.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&nbsp;/g, " ");
 function visibleText(src) {
   return decode(
     stripFrontmatter(src)
@@ -100,10 +339,9 @@ function visibleText(src) {
       .replace(/\{[^{}]*\}/g, " ").replace(/<[^>]+>/g, " "),
   ).replace(/\s+/g, " ").trim();
 }
-const words = (t) => (t ? t.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length : 0);
 
-function routeOf(path) {
-  let r = path.replace(/^src\/pages/, "").replace(/\.(astro|mdx?|html)$/, "").replace(/\/index$/, "");
+function routeOf(p) {
+  let r = p.replace(/^src\/pages/, "").replace(/\.(astro|mdx?|html)$/, "").replace(/\/index$/, "");
   return r === "" ? "/" : r;
 }
 const isDynamic = (r) => /\[[^\]]+\]/.test(r);
@@ -123,7 +361,11 @@ function internalLinks(src) {
 }
 
 // ── 1. read the site ────────────────────────────────────────────────────────────────────────
-const status = kleap(["status", APP]);
+let status;
+try { status = kleap(["status", APP]); } catch (e) {
+  console.error(e.auth ? `STOP: the Kleap login or key was refused (${String(e.message).slice(0, 160)}). Run: kleap auth logout && kleap auth login   (or create a Full key at https://kleap.co/settings/api-key)` : String(e.message));
+  process.exit(e.auth ? 4 : 1);
+}
 const appId = status.app_id ?? status.id ?? APP;
 const prodUrl = status.production_url ?? status.url ?? null;
 const siteName = status.name ?? String(APP);
@@ -132,48 +374,49 @@ const ls = kleap(["files", "ls", String(appId)]);
 const allPaths = (ls.files || ls).map((f) => (typeof f === "string" ? f : f.path));
 const pagePaths = allPaths.filter((p) => /^src\/pages\/.+\.(astro|mdx?)$/.test(p) && !/\/404\.astro$/.test(p)).slice(0, MAX_PAGES);
 const sharedPaths = allPaths.filter((p) => /^src\/(components|layouts)\/.+\.astro$/.test(p));
-const dataPaths = new Set(allPaths.filter((p) => p.startsWith("src/data/")));
 const publicPaths = new Set(allPaths.filter((p) => p.startsWith("public/")).map((p) => "/" + p.slice(7)));
 
 const contents = {};
-async function readAll(paths) {
+function readAll(paths) {
   for (let i = 0; i < paths.length; i += 15) {
     const res = kleap(["files", "cat", String(appId), ...paths.slice(i, i + 15)]);
     for (const f of res.files || []) contents[f.path] = f.content ?? "";
   }
 }
 if (pagePaths.length === 0) {
-  const msg = `${siteName} (${appId}): no src/pages/*.astro found. This autopilot audits Astro sites only (a legacy Next.js site has no such files). Nothing to do.`;
+  const msg = `${siteName} (${appId}): no src/pages/*.astro found. This autopilot fixes Astro sites only (a legacy Next.js site has no such files). Nothing to do. (You can still audit its public pages: --url ${prodUrl || "<url>"})`;
   if (AS_JSON) console.log(JSON.stringify({ app_id: appId, name: siteName, supported: false, message: msg }));
   else console.log(msg);
   process.exit(3);
 }
-await readAll([...pagePaths, ...sharedPaths]);
+readAll([...pagePaths, ...sharedPaths]);
 
 // ── 2. per-page facts ───────────────────────────────────────────────────────────────────────
-const pages = pagePaths.map((path) => {
-  const src = contents[path] || "";
+const pages = pagePaths.map((p) => {
+  const src = contents[p] || "";
   const attrs = layoutAttrs(src);
   const pick = (n) => (attrs && attrs[n] ? attrs[n] : null);
   // one level of component text, so a page built from <Hero/> <Services/> is not "thin"
   const compSrc = [...frontmatter(src).matchAll(/import\s+\w+\s+from\s+['"]([^'"]+\.astro)['"]/g)]
     .map((m) => m[1]).map((rel) => {
       const base = rel.replace(/^@\//, "src/");
-      const cand = rel.startsWith("@/") ? [base] : [path.replace(/[^/]+$/, "") + rel].map((p) => p.replace(/[^/]+\/\.\.\//g, ""));
+      const cand = rel.startsWith("@/") ? [base] : [p.replace(/[^/]+$/, "") + rel].map((x) => x.replace(/[^/]+\/\.\.\//g, ""));
       return cand.map((c) => contents[c.replace(/^\.\//, "")] || "").join(" ");
     }).join(" ");
   const usesData = /from\s+['"][^'"]*(src\/data|\.\.\/data|@\/data)[^'"]*['"]|\.json['"]/.test(frontmatter(src));
   const imgTags = [...(src + " " + compSrc).matchAll(/<(?:img|Image)\b[^>]*>/gi)].map((m) => m[0]);
   const body = stripFrontmatter(src);
+  const text = (visibleText(src) + " " + visibleText(compSrc)).trim();
+  const h1Text = (body.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i) || [, ""])[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
   return {
-    path, route: routeOf(path), dynamic: isDynamic(routeOf(path)),
+    path: p, route: routeOf(p), dynamic: isDynamic(routeOf(p)),
     hasLayout: !!attrs,
     title: pick("title"), description: pick("description"),
     hasSchema: !!pick("schema"), noindex: !!pick("noindex"),
-    h1: (body.match(/<h1\b/gi) || []).length + (compSrc.match(/<h1\b/gi) || []).length,
+    h1: (body.match(/<h1\b/gi) || []).length + (compSrc.match(/<h1\b/gi) || []).length, h1Text,
     imgs: imgTags.length,
     imgsMissingAlt: imgTags.filter((t) => !/\balt\s*=/.test(t) && !/\{\s*\.\.\./.test(t)).length,
-    words: words(visibleText(src)) + words(visibleText(compSrc)),
+    words: words(text), text: text.toLowerCase(),
     usesData,
     links: internalLinks(src),
   };
@@ -185,8 +428,6 @@ const dynRoutes = pages.filter((p) => p.dynamic).map((p) => dynRe(p.route));
 const routeExists = (r) => staticRoutes.has(r) || dynRoutes.some((re) => re.test(r)) || publicPaths.has(r) || r === "/404";
 
 // ── 3. findings ─────────────────────────────────────────────────────────────────────────────
-const findings = [];
-const add = (page, type, impact, detail, fix) => findings.push({ page, type, impact, detail, fix });
 const titleCount = {}, descCount = {}, dupReported = new Set();
 const routesWith = (get, v) => pages.filter((q) => get(q)?.kind === "literal" && get(q).value.toLowerCase() === v).map((q) => q.route);
 for (const p of pages) {
@@ -200,7 +441,7 @@ for (const p of pages) {
   const t = p.title, d = p.description;
   if (!t || (t.kind === "literal" && !t.value.trim())) add(r, "missing_title", 10, "no title passed to the layout (falls back to the bare site name)", "add a unique, keyword-led title (30-60 chars)");
   else if (t.kind === "literal") {
-    const n = t.value.length;
+    const n = wlen(t.value);
     if (n < T.titleMin) add(r, "title_short", 5, `title is ${n} chars: "${t.value}"`, `rewrite to ${T.titleMin}-${T.titleMax} chars with the main keyword + business/location`);
     if (n > T.titleMax) add(r, "title_long", 4, `title is ${n} chars and will be truncated: "${t.value}"`, `shorten to <= ${T.titleMax} chars, keyword first`);
     const tk = "t:" + t.value.toLowerCase();
@@ -208,7 +449,7 @@ for (const p of pages) {
   }
   if (!d || (d.kind === "literal" && !d.value.trim())) add(r, "missing_description", 10, "no meta description passed to the layout (Google will invent a snippet)", "write a 70-160 char description that sells the click");
   else if (d.kind === "literal") {
-    const n = d.value.length;
+    const n = wlen(d.value);
     if (n < T.descMin) add(r, "description_short", 5, `description is ${n} chars: "${d.value}"`, `expand to ${T.descMin}-${T.descMax} chars with a benefit and a call to action`);
     if (n > T.descMax) add(r, "description_long", 3, `description is ${n} chars and will be cut`, `trim to <= ${T.descMax} chars`);
     const dk = "d:" + d.value.toLowerCase();
@@ -220,9 +461,9 @@ for (const p of pages) {
   if (!p.usesData && p.words < T.thinWords && r !== "/") add(r, "thin_page", 5, `about ${p.words} words of visible text`, "expand with useful, specific content (services, FAQs, proof) — do not pad");
   if (r === "/" && !p.hasSchema) add(r, "no_page_schema", 4, "homepage passes no schema= (Base only emits generic WebSite + WebPage JSON-LD)", "add a LocalBusiness/Organization node (and FAQPage if the page has real FAQs) through the layout's schema prop");
   else if (!p.hasSchema && r !== "/") add(r, "no_page_schema", 2, "no page-level JSON-LD", "add the node that matches the page (Service, FAQPage, Article, Product…) through the schema prop");
-  for (const l of p.links) if (!routeExists(l)) add(r, "dead_internal_link", 7, `links to ${l}, which is not a page of this site`, "point it to an existing page, or create the page (never leave a dead link)");
+  for (const l of p.links) if (!routeExists(l)) add(r, "dead_internal_link", 9, `links to ${l}, which is not a page of this site`, "point it to an existing page, or create the page (never leave a dead link)");
 }
-for (const l of sharedLinks) if (!routeExists(l)) add("(shared nav/footer)", "dead_internal_link", 8, `shared component links to ${l}, which is not a page of this site`, "fix the link or create the page");
+for (const l of sharedLinks) if (!routeExists(l)) add("(shared nav/footer)", "dead_internal_link", 9, `shared component links to ${l}, which is not a page of this site`, "fix the link or create the page");
 for (const p of pages) {
   if (p.dynamic || p.noindex || p.route === "/") continue;
   const inbound = sharedLinks.has(p.route) || pages.some((q) => q !== p && q.links.has(p.route));
@@ -230,60 +471,85 @@ for (const p of pages) {
 }
 
 // ── 4. Search Console ───────────────────────────────────────────────────────────────────────
-let gsc = { connected: false, note: "skipped (--no-gsc)" };
+let gsc = { connected: false, state: "skipped", note: "skipped (--no-gsc)" };
 if (!flag("--no-gsc")) {
   try {
     const g = kleap(["search-console", String(appId)]);
-    if (!g.connected || g.site_selected === false) gsc = { connected: false, note: g.message || "not connected" };
-    else if (g.has_data === false) gsc = { connected: true, no_data: true, clicks: 0, impressions: 0, period: g.period, low_ctr_queries: [], note: g.note || g.message || "connected, no data yet" };
+    if (!g.connected || g.site_selected === false) gsc = { connected: false, state: g.connected ? "no_property" : "not_connected", note: g.message || "not connected" };
+    else if (g.has_data === false) gsc = { connected: true, state: "no_data", no_data: true, clicks: 0, impressions: 0, period: g.period, low_ctr_queries: [], top_pages: [], note: g.note || g.message || "connected, no data yet" };
     else {
       const opp = (g.top_queries || []).filter((q) => q.impressions >= T.gscMinImpressions && q.ctr < T.gscMaxCtrPct && q.position <= T.gscMaxPosition);
       const topPage = [...(g.top_pages || [])].sort((a, b) => b.impressions - a.impressions)[0];
-      gsc = { connected: true, period: g.period, clicks: g.clicks, impressions: g.impressions, ctr: g.ctr, position: g.position, top_pages: (g.top_pages || []).slice(0, 5), low_ctr_queries: opp };
+      gsc = { connected: true, state: "ok", period: g.period, clicks: g.clicks, impressions: g.impressions, ctr: g.ctr, position: g.position, top_pages: g.top_pages || [], top_queries: g.top_queries || [], low_ctr_queries: opp };
       for (const q of opp) {
         add(topPage ? new URL(topPage.page, "https://x").pathname : "(unknown page)", "gsc_low_ctr", 9,
           `"${q.query}": ${q.impressions} impressions, ${q.ctr}% CTR, position ${q.position}`,
-          "rewrite the title + meta description of the page that ranks for it so they match the query intent (queries and pages are separate lists: confirm the page by reading its content)");
+          "rewrite the title + meta description of the page that ranks for it so they match the query intent (queries and pages are separate lists: confirm the page by reading its content). Verify by the served title, not by this finding: it stays until Google re-crawls");
       }
     }
-  } catch (e) { gsc = { connected: false, note: String(e.message).slice(0, 200) }; }
+  } catch (e) {
+    gsc = e.auth
+      ? { connected: false, state: "auth_error", note: "this Kleap login or key cannot read Search Console (INSUFFICIENT_SCOPE or 401). Fix: `kleap auth logout && kleap auth login` (logins made with an older CLI lack the analytics scope) or use a Full-preset key. This is NOT the same as 'not connected'." }
+      : { connected: false, state: "error", note: String(e.message).slice(0, 200) };
+  }
 }
 
 // ── 5. live check (optional) ────────────────────────────────────────────────────────────────
 const live = [];
+let hasLlms = null;
 if (flag("--live") && prodUrl) {
   for (const p of pages.filter((x) => !x.dynamic).slice(0, 30)) {
     try {
       const res = await fetch(new URL(p.route, prodUrl), { redirect: "follow", headers: { "user-agent": "kleap-seo-autopilot" } });
       const html = await res.text();
+      const meta = (html.match(/<meta\s+name="description"\s+content="([^"]*)"/i) || [, ""])[1];
       const lt = decode((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [, ""])[1].trim());
-      live.push({ route: p.route, status: res.status, title: lt });
+      const lh = decode((html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i) || [, ""])[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+      live.push({ route: p.route, status: res.status, title: lt, description: decode(meta), h1: lh });
       if (res.status !== 200) add(p.route, "live_not_200", 10, `live URL answers ${res.status}`, "publish again and check get_publish_status");
-      else if (p.title?.kind === "literal" && lt && lt !== decode(p.title.value)) add(p.route, "live_title_differs", 4, `live title "${lt}" differs from source "${p.title.value}"`, "publish, then re-check (the new version may not be serving yet)");
+      else {
+        const diffs = [];
+        if (p.title?.kind === "literal" && lt && lt !== decode(p.title.value)) diffs.push(`title live "${lt}" vs source "${p.title.value}"`);
+        if (p.description?.kind === "literal" && meta && decode(meta) !== decode(p.description.value)) diffs.push("meta description differs");
+        if (diffs.length) add(p.route, "live_title_differs", 4, `source and live site differ (${diffs.join("; ")}): either a publish is pending or there are unpublished edits that a publish would also ship`, "publish, then re-check; if you did not make the difference, tell the owner before publishing");
+      }
     } catch (e) { live.push({ route: p.route, error: String(e.message).slice(0, 80) }); }
   }
   for (const f of ["/robots.txt", "/sitemap-index.xml"]) {
     try { const r = await fetch(new URL(f, prodUrl)); live.push({ route: f, status: r.status }); if (r.status !== 200) add(f, "live_not_200", 6, `${f} answers ${r.status}`, "publish again; robots.txt lives in public/"); } catch {}
   }
+  try { const r = await fetch(new URL("/llms.txt", prodUrl)); hasLlms = r.status === 200; } catch {}
 }
 
-// ── 6. output ───────────────────────────────────────────────────────────────────────────────
-findings.sort((a, b) => b.impact - a.impact);
-// top 3 = highest impact, at most one finding TYPE per page, so the three fixes are three different things
-const seen = new Set(), top3 = [];
-for (const f of findings) { const k = f.page + "|" + f.type; if (!seen.has(k)) { seen.add(k); top3.push(f); } if (top3.length === 3) break; }
+// ── 6. growth ideas (only ever proposals) ───────────────────────────────────────────────────
+const growth = [];
+const statics = pages.filter((p) => !p.dynamic && !p.noindex);
+if (statics.length <= 2) growth.push({ type: "single_page_site", why: "a one-page site competes for one keyword set; a dedicated page for each service, room or product (built only from facts the site already shows) ranks for far more searches" });
+if (gsc.state === "ok") {
+  const toks = (q) => q.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3);
+  for (const q of (gsc.top_queries || []).filter((x) => x.impressions >= 20 && x.position <= 40).slice(0, 10)) {
+    const t = toks(q.query);
+    if (!t.length) continue;
+    const best = Math.max(...statics.map((p) => t.filter((w) => (p.text + " " + (p.title?.value || "") + " " + (p.description?.value || "")).toLowerCase().includes(w)).length / t.length));
+    if (best < 0.67) growth.push({ type: "query_without_page", why: `"${q.query}" shows your site (${q.impressions} impressions, position ${q.position}) but no page uses those words: propose a section or page that answers it` });
+  }
+}
+if (!statics.some((p) => /faq|frequently asked/.test(p.text) || p.hasSchema && /FAQPage/.test(contents[p.path] || "")) && statics.some((p) => p.words >= T.thinWords)) growth.push({ type: "no_faq", why: "no FAQ section: real questions customers ask can earn rich results (use only questions and answers the owner confirms)" });
+if (hasLlms === false) growth.push({ type: "no_llms_txt", why: "no /llms.txt: a short plain-text summary of the business helps AI search tools describe it correctly (write it only from facts the site shows)" });
 
+// ── 7. output ───────────────────────────────────────────────────────────────────────────────
+const blocked = blockedPairs(appId);
+const score = scoreOf(statics.map((p) => p.route));
+const { top3, waiting } = pickTop3(blocked);
 const report = {
-  app_id: appId, name: siteName, production_url: prodUrl, published: !!prodUrl,
-  pages_audited: pages.filter((p) => !p.dynamic).length, dynamic_routes_skipped: pages.filter((p) => p.dynamic).map((p) => p.route),
-  finding_count: findings.length, top3, findings, gsc, live,
+  mode: "kleap", app_id: appId, name: siteName, production_url: prodUrl, published: !!prodUrl,
+  pages_audited: statics.length, dynamic_routes_skipped: pages.filter((p) => p.dynamic).map((p) => p.route),
+  finding_count: findings.length, score, top3, waiting, findings: [...findings].sort((a, b) => b.impact - a.impact), growth: growth.slice(0, 5), gsc, live,
+  // current facts per page: `seo-log.mjs measure` compares these with what the autopilot wrote earlier (did the owner keep it?)
+  pages: statics.map((p) => ({
+    route: p.route, title: p.title?.kind === "literal" ? p.title.value : null, description: p.description?.kind === "literal" ? p.description.value : null,
+    h1: p.h1, images: p.imgs, images_missing_alt: p.imgsMissingAlt, words: p.words, has_schema: p.hasSchema,
+  })),
 };
 if (AS_JSON) console.log(JSON.stringify(report, null, 2));
-else {
-  console.log(`${siteName} (${appId}) — ${prodUrl || "NOT PUBLISHED"} — ${report.pages_audited} pages, ${findings.length} findings`);
-  console.log(`GSC: ${gsc.connected ? `${gsc.clicks} clicks / ${gsc.impressions} impressions (${gsc.period}), ${gsc.low_ctr_queries.length} low-CTR queries${gsc.no_data ? " (no data yet)" : ""}` : "not connected — " + String(gsc.note).slice(0, 90)}`);
-  console.log(top3.length ? "TOP 3:" : "No findings: nothing to fix on this site today.");
-  top3.forEach((f, i) => console.log(` ${i + 1}. [${f.impact}] ${f.page}  ${f.type}: ${f.detail}\n      → ${f.fix}`));
-  const rest = findings.filter((f) => !top3.includes(f));
-  if (rest.length) console.log(`OTHER (${rest.length}): ` + rest.slice(0, 12).map((f) => `${f.page} ${f.type}`).join(" | "));
-}
+else render(report, { external: false });
