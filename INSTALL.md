@@ -1,7 +1,7 @@
 # Install Kleap Skills
 
-Five skills — `kleap-build`, `kleap-edit`, `kleap-publish`, `kleap-data`, `kleap-multilingual` — for building, editing
-and publishing real hosted websites with Kleap from any agent.
+Six skills — `kleap-build`, `kleap-edit`, `kleap-publish`, `kleap-data`, `kleap-multilingual`, `kleap-seo-autopilot` — for building, editing,
+publishing and SEO-maintaining real hosted websites with Kleap from any agent.
 
 ## Option 1 — `npx skills` (recommended, cross-agent)
 
@@ -9,7 +9,7 @@ and publishing real hosted websites with Kleap from any agent.
 npx skills add kleaphq/skills
 ```
 
-Installs all three skills. The `skills` CLI auto-detects the host agent (Claude
+Installs all the skills (one only: `npx skills add kleaphq/skills --skill kleap-seo-autopilot`). The `skills` CLI auto-detects the host agent (Claude
 Code, Cursor, Codex, …) and writes each skill to the right path.
 
 ## Option 2 — `gh skill install`
