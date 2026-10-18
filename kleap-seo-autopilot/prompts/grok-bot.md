@@ -84,7 +84,7 @@ For each site, in order:
    Skip any page|problem that runs[] shows fixed in the last 14 days or reverted in the last 30 days.
    get_search_console(app_id) on the first run and on Mondays: a query with >= 100 impressions, CTR < 2% and position <= 20 means the page ranking for it needs a better
    title and description (top queries and top pages are separate lists: read the top page to be sure). If connected is false, write "Search Console not connected" and go on.
-3. PLAN. Pick the 3 highest-impact problems: missing title/description and dead links > low-CTR rewrites > duplicates > alt text > schema > thin pages.
+3. PLAN. Pick the 3 highest-impact problems: missing title/description and dead links > low-CTR rewrites > duplicate titles > missing or double <h1> > short title/description > alt text > schema > thin pages (the same order the shell audit uses).
 4. ASK. If this is the first run, or mode is not "auto", or the memory is missing: STOP, show "page: before -> after" for each fix, say "publishing also ships any other
    unpublished edit in the site", and wait for my yes. Apply nothing yet. (If my message above already says to go ahead / autopilot, or mode is "auto", continue.)
 5. FIX with ONE edit_files call per site (old_string copied exactly from read_files; never write_files over an existing page).

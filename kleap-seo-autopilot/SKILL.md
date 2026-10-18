@@ -86,6 +86,7 @@ node $SKILL_DIR/scripts/seo-audit.mjs --url https://example.com          # add -
 ```
 Read-only GET requests on the public pages (homepage + sitemap, 12 pages by default). Prints the checklist score (our own 0-100, not a Google metric), the top 3 problems with the fix for each, and growth ideas.
 Then tell the owner the honest next step: fixing these automatically (edit, publish, verify, undo) works for sites hosted on Kleap; for any other host, the list is theirs to apply.
+No Kleap site yet and they want one? `$K auth login` creates the account in the browser, and the sibling skill `kleap-build` (same repo) builds a site from a description; this skill takes over once it is published.
 
 ## 3. Level 1, first run on a site (attended, about 2 minutes)
 
@@ -96,7 +97,7 @@ node $SKILL_DIR/scripts/seo-log.mjs brief $SITE               # first_run, mode,
 node $SKILL_DIR/scripts/seo-log.mjs drift $SITE               # none (first run) | clean | drift
 node $SKILL_DIR/scripts/seo-audit.mjs $SITE --live            # checklist score, TOP 3, WAITING, growth ideas, Search Console state
 ```
-1. **Choose the fixes** (<= 3). The audit already skips what was fixed in the last 14 days and what was reverted in the last 30. Order: missing title/description > dead links > live errors > `gsc_low_ctr` > duplicates > alt text > schema > thin pages (this is the audit's order: trust its TOP 3).
+1. **Choose the fixes** (<= 3). The audit already skips what was fixed in the last 14 days and what was reverted in the last 30. The audit ranks by impact (10 missing title, missing description, live page errors; 9 dead links, Google low-CTR rewrites, `noindex`; 8 duplicates; then no `<h1>`, orphan pages, short titles/descriptions, alt text, schema): take its TOP 3 as it is.
    How to write each one: `references/astro-seo-fixes.md`. Read the hero and about text first and keep the site's language, tone and product names. Apply `brief.lessons` and `owner_style` (section 5).
 2. **Show the plan, then ask once** (rule 2):
    ```
