@@ -48,6 +48,7 @@ ChatGPT / Claude web: add it as a custom connector. Prefer a local CLI? `npx -y 
 | **kleap-publish** | Publish with the verified-live guarantee, buy a domain (user-paid checkout) or connect one |
 | **kleap-data** | Read form leads, traffic and Search Console; read and change the site's database |
 | **kleap-multilingual** | Make an Astro site multilingual (i18n routes, hreflang, language switcher) |
+| **kleap-seo-autopilot** | Your agent improves your sites' SEO every day: audit, fix the 3 best things, publish verified-live, log, weekly summary |
 
 ## The golden rule
 
