@@ -1,4 +1,4 @@
-# 28-day traffic experiment for kleap-seo-autopilot (prepared, NOT started: needs the founder's yes)
+# 28-day traffic experiment for kleap-seo-autopilot (STARTED 2026-10-19 on the founder's own sites; J3 2026-10-22, J14 2026-11-02, J28 2026-11-16)
 
 Why: every reviewer asks for the same proof: a measured Search Console gain. It cannot be faked and it cannot be rushed (a title change takes 2-4 weeks to show, Search Console lags 2-3 days).
 The skill already records `gsc_before` per fix and `seo-log.mjs measure` judges it after 14+ days. What is missing is real sites with Search Console connected. They exist.
@@ -35,3 +35,8 @@ Nothing was touched: this file is the plan. Several of these sites belong to thi
 - Use the untouched pages of each treated site as an additional control (young sites grow anyway), and pre-register the metric and the day-14 read before the first edit.
 - Count the one approved new page per week as part of the treatment, and never auto-rewrite a title on a page that already has 100+ impressions without the owner's yes (a page that ranks is not a metadata problem).
 - Start with the founder's own sites (345 eliottdupuy.com, 10483 marjantrajkov.ch): no third-party consent is needed.
+
+## What actually happened on day 0 (2026-10-19)
+- Running the skill for real on a complex Astro site exposed four families of false positives in the static source audit (a title/description/h1 set by a wrapper layout, redirect and 404 stubs, links made by React components, word counts of components). On eliottdupuy.com the 0.3.0 audit said 80/100 with a false top 3. 0.3.1 reconciles every finding with the LIVE page: 95/100, and 5 offline checks guard it. Lesson for anyone running this: an audit score from source alone is a hypothesis, the served page is the fact.
+- eliottdupuy.com (founder's site) was treated: 3 title trims (62-66 characters to <= 60) on pages with fewer than 12 impressions in 28 days. Honest prior: no measurable movement. marjantrajkov.ch was NOT touched: its owner had 7 unpublished files (two AI edits after the last publish) and a publish would have shipped them. The guard stopped the run, nothing was rebaselined.
+- Deviation from the design above: eliottdupuy.com is TREAT here (it was CONTROL); the controls are serrureriesk.ch, juliendelhumeau.com and devisserrurier.ch plus the untouched pages of each treated site.

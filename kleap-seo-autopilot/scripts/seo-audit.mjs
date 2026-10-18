@@ -580,10 +580,10 @@ if (!flag("--no-gsc")) {
 }
 
 // ── 5. live check (optional) ────────────────────────────────────────────────────────────────
-const live = [];
+const live = [], liveInbound = {}, ownerNotes = [];
 let hasLlms = null;
 if (flag("--live") && prodUrl) {
-  for (const p of pages.filter((x) => !x.dynamic).slice(0, 30)) {
+  for (const p of pages.filter((x) => !x.dynamic).slice(0, 60)) {
     try {
       const res = await fetch(new URL(p.route, prodUrl), { redirect: "follow", headers: { "user-agent": "kleap-seo-autopilot" } });
       const html = await res.text();
@@ -591,8 +591,41 @@ if (flag("--live") && prodUrl) {
       const lt = decode((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [, ""])[1].trim());
       const lh = decode((html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i) || [, ""])[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
       live.push({ route: p.route, status: res.status, title: lt, description: decode(meta), h1: lh });
-      if (res.status !== 200) add(p.route, "live_not_200", 10, `live URL answers ${res.status}`, "publish again and check get_publish_status");
+      for (const m of html.matchAll(/<a\b[^>]*?\shref=["']([^"'#?]+)/gi)) { const h = m[1].replace(/^https?:\/\/[^/]+/i, ""); if (h.startsWith("/")) { const k = h.replace(/\/+$/, "") || "/"; if (k !== (p.route.replace(/\/+$/, "") || "/")) (liveInbound[k] ||= new Set()).add(p.route); } }
+      const stub = /Astro\.redirect\(|new Response\([^)]*\b(404|410|30[1278])\b/.test(contents[p.path] || "");
+      if (stub && (res.redirected || res.status !== 200)) {
+        // a deliberate redirect / 404 stub in the source: nothing to fix, and the redirect TARGET's title and links must not be judged as this page's
+        for (let i = findings.length - 1; i >= 0; i--) if (findings[i].page === p.route) findings.splice(i, 1);
+        ownerNotes.push(`${p.route} is a deliberate ${res.redirected ? "redirect" : res.status + " stub"} in the source (left alone)`);
+        live.pop();
+      } else if (res.status !== 200) add(p.route, "live_not_200", 10, `live URL answers ${res.status}`, "publish again and check get_publish_status");
       else {
+        // The source parser cannot see through a wrapper layout or a component that sets the head (e.g. <PortfolioPage> -> <Base title=...>).
+        // The LIVE page is the truth: drop the source-only "missing" findings it contradicts, and judge the lengths on the live values instead.
+        const drop = (...types) => { for (let i = findings.length - 1; i >= 0; i--) if (findings[i].page === p.route && types.includes(findings[i].type)) findings.splice(i, 1); };
+        const viaWrapper = " (set by a layout/component: change it where that wrapper builds the head)";
+        if (lt) {
+          drop("missing_title");
+          if (!p.title || p.title.kind !== "literal") {
+            const n = wlen(lt);
+            if (n < T.titleMin) add(p.route, "title_short", shortImpact(n, T.titleMin), `title is ${n} chars: "${lt}"${viaWrapper}`, `rewrite to ${T.titleMin}-${T.titleMax} chars with the main keyword + business/location`);
+            if (n > T.titleMax) add(p.route, "title_long", 4, `title is ${n} chars and will be truncated: "${lt}"${viaWrapper}`, `shorten to <= ${T.titleMax} chars, keyword first`);
+          }
+        }
+        if (meta) {
+          drop("missing_description");
+          if (!p.description || p.description.kind !== "literal") {
+            const dm = decode(meta), n = wlen(dm);
+            if (n < T.descMin) add(p.route, "description_short", shortImpact(n, T.descMin), `description is ${n} chars: "${dm}"${viaWrapper}`, `expand to ${T.descMin}-${T.descMax} chars with a benefit and a call to action`);
+            if (n > T.descMax) add(p.route, "description_long", 3, `description is ${n} chars and will be cut${viaWrapper}`, `trim to <= ${T.descMax} chars`);
+          }
+        }
+        if (lh) drop("no_h1");
+        const liveWords = html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ").replace(/<[^>]+>/g, " ").split(/\s+/).filter(Boolean).length;
+        if (liveWords >= T.thinWords) drop("thin_page");
+        const ldTypes = [...html.matchAll(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)].flatMap((m) => { try { const j = JSON.parse(m[1]); return (j["@graph"] || [j]).flatMap((n) => [].concat(n["@type"] || [])); } catch { return []; } });
+        if (ldTypes.some((x) => !["WebSite", "WebPage", "BreadcrumbList", "Organization"].includes(x))) drop("no_page_schema");
+        if (lt && meta) drop("no_layout");
         const diffs = [];
         if (p.title?.kind === "literal" && lt && lt !== decode(p.title.value)) diffs.push(`title live "${lt}" vs source "${p.title.value}"`);
         if (p.description?.kind === "literal" && meta && decode(meta) !== decode(p.description.value)) diffs.push("meta description differs");
@@ -600,6 +633,8 @@ if (flag("--live") && prodUrl) {
       }
     } catch (e) { live.push({ route: p.route, error: String(e.message).slice(0, 80) }); }
   }
+  // Links that only exist in a React/shared component are invisible to the source parser: a page the LIVE site links to is not an orphan.
+  for (let i = findings.length - 1; i >= 0; i--) if (findings[i].type === "orphan_page" && liveInbound[findings[i].page.replace(/\/+$/, "") || "/"]?.size) findings.splice(i, 1);
   for (const f of ["/robots.txt", "/sitemap-index.xml"]) {
     try { const r = await fetch(new URL(f, prodUrl)); live.push({ route: f, status: r.status }); if (r.status !== 200) add(f, "live_not_200", 6, `${f} answers ${r.status}`, "publish again; robots.txt lives in public/"); } catch {}
   }
@@ -629,7 +664,7 @@ const { top3, waiting } = pickTop3(blocked);
 const report = {
   mode: "kleap", app_id: appId, name: siteName, production_url: prodUrl, published: !!prodUrl,
   pages_audited: statics.length, dynamic_routes_skipped: pages.filter((p) => p.dynamic).map((p) => p.route),
-  finding_count: findings.length, score, top3, waiting, findings: [...findings].sort((a, b) => b.impact - a.impact), growth: growth.slice(0, 5), gsc, live,
+  finding_count: findings.length, owner_notes: ownerNotes, score, top3, waiting, findings: [...findings].sort((a, b) => b.impact - a.impact), growth: growth.slice(0, 5), gsc, live,
   // current facts per page: `seo-log.mjs measure` compares these with what the autopilot wrote earlier (did the owner keep it?)
   pages: statics.map((p) => ({
     route: p.route, title: p.title?.kind === "literal" ? p.title.value : null, description: p.description?.kind === "literal" ? p.description.value : null,

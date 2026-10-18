@@ -9,7 +9,7 @@
       "name": "kleap",
       "source": "./",
       "description": "Build, edit, publish and SEO-optimize real hosted websites via the Kleap MCP server (verified-live), read their leads, traffic and database, and buy or connect domains.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "skills": [
         "./kleap-build",
         "./kleap-edit",

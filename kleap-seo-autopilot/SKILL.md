@@ -6,7 +6,7 @@ description: >-
   seen but not clicked. It asks before the first publish, refuses to ship your unfinished edits, remembers inside your site and
   learns from the results. Use when the user says "improve my SEO", "SEO autopilot", "audit my site", "why am I not on Google",
   or schedules a recurring agent task on a site built with Kleap.
-version: 0.2.2
+version: 0.2.3
 license: MIT
 compatibility: "Claude Code, OpenClaw, Hermes Agent, Codex, Grok Build and any Agent Skills client with a shell and Node >= 18. Agents without a shell (ChatGPT, Claude.ai, Grok API) run the same loop through the Kleap MCP connector: see prompts/."
 metadata:
@@ -44,7 +44,7 @@ It asks before the first publish, remembers what it did inside your site, checks
 | `/` | menu link to a page that does not exist | `/spa` | link removed, text kept, owner told |
 
 **How much is there to fix?** The free audit on 150 random Kleap sites: 46% already score 100/100, 41% have something worth fixing first. So the fix loop has real work on about 4 sites in 10, then runs dry: a clean site is reported as a win and followed by ONE approved growth idea a week.
-**Not proven yet: traffic.** Google needs weeks and no long-run result is in. Day one proves that every change is small, visible, checked live and reversible. `references/proof.md` says what would count as proof; `node scripts/selftest.mjs` runs 54 offline checks; risks and undo are in `skill-card.md`.
+**Not proven yet: traffic.** Google needs weeks and no long-run result is in. Day one proves that every change is small, visible, checked live and reversible. `references/proof.md` says what would count as proof; `node scripts/selftest.mjs` runs 59 offline checks; risks and undo are in `skill-card.md`.
 
 **Try it now:** `node scripts/seo-audit.mjs --url https://your-site.com` (any public site, read-only, 4-15 seconds on a normal site;), or tell your agent: *"Use the kleap-seo-autopilot skill on my-site.kleap.io."*
 Not sure it is ready on this machine? `node scripts/seo-doctor.mjs my-site.kleap.io` prints a checklist and the one next step.
