@@ -25,7 +25,7 @@ Claude Code marketplace:
 
 ```
 /plugin marketplace add kleaphq/skills
-/plugin install kleap@kleap
+/plugin install kleap@kleap-skills
 ```
 
 ## Connect Kleap (no API key)

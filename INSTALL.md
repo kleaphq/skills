@@ -24,7 +24,7 @@ gh skill install kleaphq/skills
 
 ```
 /plugin marketplace add kleaphq/skills
-/plugin install kleap@kleap
+/plugin install kleap@kleap-skills
 ```
 
 ## Then connect Kleap (no API key)
