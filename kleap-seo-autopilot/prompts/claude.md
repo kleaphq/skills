@@ -7,7 +7,7 @@ Three ways, from most to least hands-off. What we ran ourselves is marked **(run
 ```bash
 # 1. install the skill (any one of these)
 npx skills add kleaphq/skills --skill kleap-seo-autopilot -g -a claude-code     # user-level (~/.claude/skills); drop -g for this project only. Works once kleaphq/skills has this version
-#   or, in Claude Code:  /plugin marketplace add kleaphq/skills   then   /plugin install kleap@kleap   (installs all 6 Kleap skills; this one is /kleap:kleap-seo-autopilot)
+#   or, in Claude Code:  /plugin marketplace add kleaphq/skills   then   /plugin install kleap@kleap-skills   (installs all 6 Kleap skills; this one is /kleap:kleap-seo-autopilot)
 #   or copy the folder:  mkdir -p ~/.claude/skills && cp -R kleap-seo-autopilot ~/.claude/skills/
 
 # 2. check the machine and connect Kleap (once). Attended: browser OAuth, nothing to paste.

@@ -27,9 +27,9 @@ gh skill install kleaphq/skills
 /plugin install kleap@kleap-skills
 ```
 
-## Then connect Kleap (no API key)
+## Connect Kleap (no API key)
 
-The skills call the Kleap MCP server. Connect it once — OAuth in the browser, no key:
+The Claude Code marketplace plugin includes the Kleap MCP connector, so no separate `claude mcp add` command is needed after installing the plugin. If you installed the skills with `npx skills` or `gh skill install`, add the connector to Claude Code manually — OAuth opens in the browser, with no key to copy:
 
 ```bash
 claude mcp add --transport http --scope user kleap https://kleap.co/api/mcp
