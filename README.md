@@ -30,7 +30,7 @@ Claude Code marketplace:
 
 ## Connect Kleap (no API key)
 
-The skills drive the Kleap MCP server. Connect it once, OAuth in the browser, no key to copy:
+The Claude Code marketplace plugin includes the Kleap MCP connector, so installing the plugin also configures the connection. If you install the skills with `npx skills` or `gh skill install`, add the connector to Claude Code separately:
 
 ```bash
 claude mcp add --transport http --scope user kleap https://kleap.co/api/mcp
